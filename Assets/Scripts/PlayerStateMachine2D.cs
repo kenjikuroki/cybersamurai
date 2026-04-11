@@ -42,6 +42,12 @@ public class PlayerStateMachine2D : CombatStateMachine2D
 
     private void HandleActionInput()
     {
+        // アクションロック中（Attack/Parry/Feint モーション中）は入力を全て無視する
+        if (IsActionLocked)
+        {
+            return;
+        }
+
         Keyboard keyboard = Keyboard.current;
         if (keyboard == null)
         {

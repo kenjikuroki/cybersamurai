@@ -66,6 +66,10 @@ public class GuardGauge : MonoBehaviour
         recoveryTimer = 0f;
         LogGuardValue();
 
+        // ガードが削られた瞬間にリアクションアニメを再生
+        CharacterSpriteAnimator2D anim = GetComponent<CharacterSpriteAnimator2D>();
+        if (anim != null) anim.TriggerGuardReaction();
+
         if (currentGuard == 0)
         {
             stateMachine.TriggerGuardBreak(guardBreakLockDuration);

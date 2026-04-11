@@ -7,14 +7,12 @@ public class PlayerMovement2D : MonoBehaviour
     public float moveSpeed = 5f;
 
     private Rigidbody2D rb;
-    private SpriteRenderer spriteRenderer;
     private CombatStateMachine2D stateMachine;
     private float horizontalInput;
 
     private void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
-        spriteRenderer = GetComponent<SpriteRenderer>();
         stateMachine = GetComponent<CombatStateMachine2D>();
     }
 
@@ -27,15 +25,7 @@ public class PlayerMovement2D : MonoBehaviour
         }
 
         horizontalInput = GetHorizontalInput();
-
-        if (horizontalInput > 0f)
-        {
-            FaceRight(true);
-        }
-        else if (horizontalInput < 0f)
-        {
-            FaceRight(false);
-        }
+        // 移動方向でスプライトを反転しない（常に相手の方向を向いて後ずさり）
     }
 
     private void FixedUpdate()
@@ -60,18 +50,5 @@ public class PlayerMovement2D : MonoBehaviour
         }
 
         return moveLeft ? -1f : 1f;
-    }
-
-    private void FaceRight(bool facingRight)
-    {
-        if (spriteRenderer != null)
-        {
-            spriteRenderer.flipX = !facingRight;
-            return;
-        }
-
-        Vector3 scale = transform.localScale;
-        scale.x = Mathf.Abs(scale.x) * (facingRight ? 1f : -1f);
-        transform.localScale = scale;
     }
 }

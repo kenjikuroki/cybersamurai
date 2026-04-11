@@ -30,26 +30,30 @@ public class SampleSceneSetup2D : MonoBehaviour
     private PlayerStateMachine2D SetupPlayer()
     {
         GameObject player = FindOrCreate("Player", new Vector3(-0.5f, 0f, 0f));
-        player.transform.localScale = new Vector3(3f, 6f, 1f);
+        player.transform.localScale = new Vector3(1f, 1f, 1f);
         SpriteRenderer spriteRenderer = SetupSpriteRenderer(player, Color.white, 1);
         SetupDynamicBody(player);
         SetupBoxCollider(player, spriteRenderer.sprite.bounds.size, Vector2.zero);
         GetOrAddComponent<PlayerMovement2D>(player);
         PlayerStateMachine2D stateMachine = GetOrAddComponent<PlayerStateMachine2D>(player);
+        SetupActionDurations(stateMachine);
         GetOrAddComponent<GuardGauge>(player);
         CharacterStateVisual2D visual = GetOrAddComponent<CharacterStateVisual2D>(player);
         visual.isPlayer = true;
+        GetOrAddComponent<CharacterSpriteAnimator2D>(player);
         return stateMachine;
     }
 
     private EnemyStateMachine2D SetupEnemy(PlayerStateMachine2D playerState)
     {
         GameObject enemy = FindOrCreate("Enemy", new Vector3(0.5f, 0f, 0f));
-        enemy.transform.localScale = new Vector3(3f, 6f, 1f);
-        SpriteRenderer spriteRenderer = SetupSpriteRenderer(enemy, Color.red, 1);
+        enemy.transform.localScale = new Vector3(1f, 1f, 1f);
+        // 色はスクリプト(CharacterStateVisual2D)で赤に設定するため白で初期化
+        SpriteRenderer spriteRenderer = SetupSpriteRenderer(enemy, Color.white, 1);
         SetupDynamicBody(enemy);
         SetupBoxCollider(enemy, spriteRenderer.sprite.bounds.size, Vector2.zero);
         EnemyStateMachine2D enemyStateMachine = GetOrAddComponent<EnemyStateMachine2D>(enemy);
+        SetupActionDurations(enemyStateMachine);
         GetOrAddComponent<GuardGauge>(enemy);
         CharacterStateVisual2D visual = GetOrAddComponent<CharacterStateVisual2D>(enemy);
         visual.isPlayer = false;
@@ -60,7 +64,20 @@ public class SampleSceneSetup2D : MonoBehaviour
         ai.chargeDuration = 0.5f;
         ai.approachDistance = 0.4f;
         ai.moveSpeed = 1.5f;
+        GetOrAddComponent<CharacterSpriteAnimator2D>(enemy);
+        // FlipX=true で右側のキャラクターを左向き（プレイヤーと向き合う）
+        SpriteRenderer enemySr = enemy.GetComponent<SpriteRenderer>();
+        if (enemySr != null) enemySr.flipX = true;
         return enemyStateMachine;
+    }
+
+    private static void SetupActionDurations(CombatStateMachine2D sm)
+    {
+        sm.attackDuration      = 1.0f;  // 攻撃：1秒ロック（判定は0.5秒時点）
+        sm.parryDuration       = 0.8f;  // パリィ：0.8秒ロック（判定は0.3秒時点）
+        sm.feintDuration       = 0.3f;  // フェイント：0.3秒ロック（判定なし）
+        sm.vulnerableDuration  = 0.8f;  // ダメージ硬直
+        sm.guardBreakDuration  = 1.2f;  // ガードブレイク硬直
     }
 
     private void SetupGround()
