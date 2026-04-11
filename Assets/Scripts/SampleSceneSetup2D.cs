@@ -74,7 +74,7 @@ public class SampleSceneSetup2D : MonoBehaviour
     private static void SetupActionDurations(CombatStateMachine2D sm)
     {
         sm.attackDuration      = 1.0f;  // 攻撃：1秒ロック（判定は0.5秒時点）
-        sm.parryDuration       = 0.8f;  // パリィ：0.8秒ロック（判定は0.3秒時点）
+        sm.parryDuration       = 0.4f;  // パリィ：外れ時のリカバリー0.4秒（成功/失敗時は即キャンセル）
         sm.feintDuration       = 0.3f;  // フェイント：0.3秒ロック（判定なし）
         sm.vulnerableDuration  = 0.8f;  // ダメージ硬直
         sm.guardBreakDuration  = 1.2f;  // ガードブレイク硬直

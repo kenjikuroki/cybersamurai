@@ -4,12 +4,15 @@ public class JankenCombatResolver2D : MonoBehaviour
 {
     public float clashThresholdSeconds = 0.2f;
 
-    [Header("Parry Timing")]
-    [Tooltip("攻撃開始からこの秒数以内にパリィ入力すれば成功")]
-    public float parryWindow = 0.5f;
+    [Header("SF3-Style Parry Timing")]
+    [Tooltip("攻撃開始からこの秒数以前のパリィ入力は早すぎてGuard扱いになる")]
+    public float parryWindowStart = 0.2f;
 
-    [Tooltip("パリィ成功時に防御側が受ける Vulnerable 状態の持続秒数")]
-    public float parrySuccessVulnerableDuration = 0.5f;
+    [Tooltip("攻撃開始からこの秒数以降のパリィ入力は遅すぎてDead扱いになる")]
+    public float parryWindowEnd = 0.3f;
+
+    [Tooltip("パリィ成功時に攻撃側が受けるVulnerable状態の持続秒数")]
+    public float attackerVulnerableDuration = 0.5f;
 
     public CombatResolutionResult Resolve(ICombatStateActor initiator, ICombatStateActor receiver)
     {
@@ -58,26 +61,39 @@ public class JankenCombatResolver2D : MonoBehaviour
             return CombatResolutionResult.InitiatorDead;
         }
 
-        // ── Attack vs Parry（タイミング判定）────────────────────────────────
+        // ── Attack vs Parry（SF3タイミング判定）─────────────────────────────
         //
-        //   攻撃開始から parryWindow 秒以内にパリィ入力 → パリィ成功
-        //     ・攻撃側：即座にロック解除（Guard へ戻る）
-        //     ・防御側：parrySuccessVulnerableDuration 秒の Vulnerable
+        //  攻撃開始を基準にパリィ入力のタイムスタンプを比較する。
         //
-        //   遅すぎたパリィ（Attack 判定が既に発火済み、または window 外）→ 防御側 Dead
+        //  判定はどちらの OnJudgmentFired が先に発火するかで決まる:
+        //   ・パリィ判定（T_p+0.3s）が先に発火するのは delay < 0.2s のとき（早すぎ）
+        //   ・攻撃判定（T_a+0.5s）が先に発火するのは delay >= 0.2s のとき（成功/遅すぎ）
+        //
+        //  早すぎ (delay < parryWindowStart):
+        //    パリィをGuardに即キャンセル → 攻撃判定でGuard扱いになる
+        //
+        //  成功  (parryWindowStart <= delay <= parryWindowEnd):
+        //    攻撃側: attackerVulnerableDuration秒のVulnerable
+        //    パリィ側: 即座にニュートラルへ（連続パリィ可能）
+        //    → 白フラッシュ演出（ShouldFlash が ParrySuccess を含む）
+        //
+        //  遅すぎ (delay > parryWindowEnd):
+        //    パリィ側: Dead
         //
         if (initiatorState == CombatStateType.Attack && receiverState == CombatStateType.Parry)
         {
-            return ResolveAttackVsParry(initiator, receiver,
-                isInitiatorAttacker: true);
+            return ResolveAttackVsParry(
+                attacker: initiator,
+                parrier:  receiver,
+                parrierIsReceiver: true);
         }
 
         if (initiatorState == CombatStateType.Parry && receiverState == CombatStateType.Attack)
         {
-            // 引数の順序を「attacker, parrier」に揃えて呼び、結果を反転する
-            CombatResolutionResult r = ResolveAttackVsParry(receiver, initiator,
-                isInitiatorAttacker: false);
-            return r;
+            return ResolveAttackVsParry(
+                attacker: receiver,
+                parrier:  initiator,
+                parrierIsReceiver: false);
         }
 
         // ── Parry vs Feint ───────────────────────────────────────────────────
@@ -134,68 +150,81 @@ public class JankenCombatResolver2D : MonoBehaviour
         return CombatResolutionResult.NoEffect;
     }
 
-    // -------------------------------------------------------------------------
-    // パリィ成否判定
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // SF3 パリィ成否判定
+    // =========================================================================
 
     /// <summary>
-    /// attacker = 攻撃側、parrier = パリィした側（順不同で呼ばれる）。
-    /// isInitiatorAttacker: true のとき initiator=attacker → 結果をそのまま返す。
-    ///                      false のとき receiver=attacker → 結果を反転して返す。
+    /// attacker.LastActionTimestamp を基準にパリィ入力の遅延を計算し、
+    /// 早すぎ / 成功 / 遅すぎ の三分岐で処理する。
+    ///
+    /// parrierIsReceiver: true  = parrier は Resolve() の receiver 側
+    ///                    false = parrier は Resolve() の initiator 側
     /// </summary>
     private CombatResolutionResult ResolveAttackVsParry(
         ICombatStateActor attacker,
         ICombatStateActor parrier,
-        bool isInitiatorAttacker)
+        bool parrierIsReceiver)
     {
-        // 攻撃側の Attack 判定がすでに発火済みかチェック
-        // （遅れてパリィ判定が届いた場合、攻撃はすでに解決済みなので無視）
         var attackerSM = attacker as CombatStateMachine2D;
+
+        // 攻撃判定がすでに発火済みなら（超遅延パリィ）解決をスキップ
         if (attackerSM != null && attackerSM.IsAttackJudgmentFired)
         {
-            // 攻撃は既に解決済み（Attack 判定時点では Guard 扱いで guard consume 済み）
-            // 遅いパリィ判定は無視する
-            Debug.Log("Parry judgment ignored: attacker's judgment already fired.", this);
+            Debug.Log("[Parry] Skipped: attacker judgment already fired (parry too late).", this);
             return CombatResolutionResult.NoEffect;
         }
 
-        // パリィ入力が攻撃開始からどのくらい遅れたか
-        float parryDelay = parrier.LastActionTimestamp - attacker.LastActionTimestamp;
-        bool success = parryDelay >= 0f && parryDelay <= parryWindow;
+        // パリィ入力のディレイ（攻撃開始からの経過秒数）
+        float delay = parrier.LastActionTimestamp - attacker.LastActionTimestamp;
 
-        if (success)
+        // ── 早すぎ（delay < parryWindowStart）────────────────────────────────
+        if (delay < parryWindowStart)
         {
-            // ── パリィ成功 ──
-            Debug.Log($"Parry SUCCESS! delay={parryDelay:F3}s (window={parryWindow}s)", this);
+            Debug.Log($"[Parry] Too EARLY: delay={delay:F3}s (window={parryWindowStart}~{parryWindowEnd}s) → Guard扱い", this);
 
-            // 攻撃側：即座にロック解除
-            attackerSM?.CancelToNeutral();
-
-            // 防御側：短い Vulnerable（parrySuccessVulnerableDuration）
+            // パリィをGuardにキャンセルし、次の攻撃判定でGuard consumeさせる
             var parrierSM = parrier as CombatStateMachine2D;
-            if (parrierSM != null)
-                parrierSM.TriggerVulnerableWithDuration(parrySuccessVulnerableDuration);
-            else
-                parrier.ChangeState(CombatStateType.Vulnerable);
+            parrierSM?.CancelToNeutral();
 
-            // parrier が「イニシエーター側か受信者側か」で結果を返す
-            return isInitiatorAttacker
-                ? CombatResolutionResult.ReceiverVulnerable   // parrier = receiver
-                : CombatResolutionResult.InitiatorVulnerable; // parrier = initiator
+            // NoEffect を返すことで lastResolutionTime を更新しない
+            // → 攻撃判定（Attack vs Guard）が正常に発火できる
+            return CombatResolutionResult.NoEffect;
         }
-        else
+
+        // ── 遅すぎ（delay > parryWindowEnd）──────────────────────────────────
+        if (delay > parryWindowEnd)
         {
-            // ── パリィ失敗（タイミング外）──
-            Debug.Log($"Parry FAILED! delay={parryDelay:F3}s (window={parryWindow}s) → parrier Dead", this);
+            Debug.Log($"[Parry] Too LATE: delay={delay:F3}s (window={parryWindowStart}~{parryWindowEnd}s) → Dead", this);
             parrier.ChangeState(CombatStateType.Dead);
 
-            return isInitiatorAttacker
-                ? CombatResolutionResult.ReceiverDead   // parrier = receiver
-                : CombatResolutionResult.InitiatorDead; // parrier = initiator
+            return parrierIsReceiver
+                ? CombatResolutionResult.ReceiverDead
+                : CombatResolutionResult.InitiatorDead;
         }
+
+        // ── 成功（parryWindowStart <= delay <= parryWindowEnd）───────────────
+        Debug.Log($"[Parry] SUCCESS! delay={delay:F3}s (window={parryWindowStart}~{parryWindowEnd}s)", this);
+
+        // 攻撃側: attackerVulnerableDuration 秒の Vulnerable
+        if (attackerSM != null)
+            attackerSM.TriggerVulnerableWithDuration(attackerVulnerableDuration);
+        else
+            attacker.ChangeState(CombatStateType.Vulnerable);
+
+        // パリィ側: 即座にニュートラルへ戻す（連続パリィ可能）
+        var successParrierSM = parrier as CombatStateMachine2D;
+        successParrierSM?.CancelToNeutral();
+
+        // 攻撃側が Vulnerable になった → InitiatorVulnerable or ReceiverVulnerable
+        // parrierIsReceiver = true  → attacker = initiator → InitiatorVulnerable
+        // parrierIsReceiver = false → attacker = receiver  → ReceiverVulnerable
+        return parrierIsReceiver
+            ? CombatResolutionResult.InitiatorParrySuccess
+            : CombatResolutionResult.ReceiverParrySuccess;
     }
 
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
     private static bool TryConsumeGuard(ICombatStateActor actor)
     {
@@ -219,5 +248,9 @@ public enum CombatResolutionResult
     InitiatorVulnerable,
     ReceiverVulnerable,
     InitiatorDead,
-    ReceiverDead
+    ReceiverDead,
+    /// <summary>パリィ成功：initiator（攻撃側）が Vulnerable になった</summary>
+    InitiatorParrySuccess,
+    /// <summary>パリィ成功：receiver（攻撃側）が Vulnerable になった</summary>
+    ReceiverParrySuccess,
 }

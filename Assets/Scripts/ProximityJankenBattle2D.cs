@@ -12,11 +12,11 @@ public class ProximityJankenBattle2D : MonoBehaviour
     private ICombatStateActor enemyActor;
     private JankenCombatResolver2D resolver;
 
-    // 同一フレームに両者の OnJudgmentFired が連続して届いても二重解決しないためのクールダウン
+    // 同一フレームに両者の OnJudgmentFired が連続して届いた場合の二重解決防止
+    // ※ NoEffect のときは lastResolutionTime を更新しない（早すぎパリィ→Guard連鎖を妨げないため）
     private float lastResolutionTime = -99f;
     private const float ResolutionCooldown = 0.05f;
 
-    // OnJudgmentFired を購読しているステートマシン（解除用）
     private CombatStateMachine2D subscribedPlayer;
     private CombatStateMachine2D subscribedEnemy;
 
@@ -34,9 +34,6 @@ public class ProximityJankenBattle2D : MonoBehaviour
 
     // -------------------------------------------------------------------------
 
-    /// <summary>
-    /// SampleSceneSetup2D から呼ばれ、アクターを設定して判定イベントを購読する。
-    /// </summary>
     public void SetActors(ICombatStateActor player, ICombatStateActor enemy)
     {
         UnsubscribeAll();
@@ -58,12 +55,8 @@ public class ProximityJankenBattle2D : MonoBehaviour
 
     // -------------------------------------------------------------------------
 
-    /// <summary>
-    /// Attack / Parry の判定タイミングで CombatStateMachine2D が発火する。
-    /// </summary>
     private void OnJudgmentFired()
     {
-        // クールダウン内の二重呼び出しを無視
         if (Time.time - lastResolutionTime < ResolutionCooldown) return;
         if (resolver == null || playerActor == null || enemyActor == null) return;
 
@@ -77,13 +70,16 @@ public class ProximityJankenBattle2D : MonoBehaviour
 
         if (distance > resolveDistance) return;
 
-        lastResolutionTime = Time.time;
-
         CombatStateType playerStateBefore = playerActor.CurrentStateType;
         CombatStateType enemyStateBefore  = enemyActor.CurrentStateType;
         CombatResolutionResult result = resolver.Resolve(playerActor, enemyActor);
 
+        // NoEffect のときはタイムスタンプを更新しない。
+        // これにより「早すぎパリィ→Guard状態に戻る→次の攻撃判定」を
+        // クールダウンで妨げないようにする。
         if (result == CombatResolutionResult.NoEffect) return;
+
+        lastResolutionTime = Time.time;
 
         string resultMessage = FormatResult(
             playerComponent.name, playerStateBefore,
@@ -121,15 +117,18 @@ public class ProximityJankenBattle2D : MonoBehaviour
 
         switch (result)
         {
-            case CombatResolutionResult.GuardBlocked:         return $"{left} vs {right} -> GUARD BLOCK!";
-            case CombatResolutionResult.InitiatorGuardBreak:  return $"{left} vs {right} -> {playerName} GUARDBREAK!";
-            case CombatResolutionResult.ReceiverGuardBreak:   return $"{left} vs {right} -> {enemyName} GUARDBREAK!";
-            case CombatResolutionResult.Clash:                return $"{left} vs {right} -> CLASH!";
-            case CombatResolutionResult.InitiatorVulnerable:  return $"{left} vs {right} -> {playerName} VULNERABLE!";
-            case CombatResolutionResult.ReceiverVulnerable:   return $"{left} vs {right} -> {enemyName} VULNERABLE!";
-            case CombatResolutionResult.InitiatorDead:        return $"{left} vs {right} -> {playerName} DEAD!";
-            case CombatResolutionResult.ReceiverDead:         return $"{left} vs {right} -> {enemyName} DEAD!";
-            default:                                          return $"{left} vs {right} -> NO EFFECT";
+            case CombatResolutionResult.GuardBlocked:          return $"{left} vs {right} -> GUARD BLOCK!";
+            case CombatResolutionResult.InitiatorGuardBreak:   return $"{left} vs {right} -> {playerName} GUARDBREAK!";
+            case CombatResolutionResult.ReceiverGuardBreak:    return $"{left} vs {right} -> {enemyName} GUARDBREAK!";
+            case CombatResolutionResult.Clash:                 return $"{left} vs {right} -> CLASH!";
+            case CombatResolutionResult.InitiatorVulnerable:   return $"{left} vs {right} -> {playerName} VULNERABLE!";
+            case CombatResolutionResult.ReceiverVulnerable:    return $"{left} vs {right} -> {enemyName} VULNERABLE!";
+            case CombatResolutionResult.InitiatorDead:         return $"{left} vs {right} -> {playerName} DEAD!";
+            case CombatResolutionResult.ReceiverDead:          return $"{left} vs {right} -> {enemyName} DEAD!";
+            // パリィ成功：攻撃側が Vulnerable になる
+            case CombatResolutionResult.InitiatorParrySuccess: return $"PARRY!! {playerName} is Vulnerable!";
+            case CombatResolutionResult.ReceiverParrySuccess:  return $"PARRY!! {enemyName} is Vulnerable!";
+            default:                                           return $"{left} vs {right} -> NO EFFECT";
         }
     }
 
@@ -141,6 +140,8 @@ public class ProximityJankenBattle2D : MonoBehaviour
             || result == CombatResolutionResult.InitiatorVulnerable
             || result == CombatResolutionResult.ReceiverVulnerable
             || result == CombatResolutionResult.InitiatorDead
-            || result == CombatResolutionResult.ReceiverDead;
+            || result == CombatResolutionResult.ReceiverDead
+            || result == CombatResolutionResult.InitiatorParrySuccess
+            || result == CombatResolutionResult.ReceiverParrySuccess;
     }
 }
