@@ -62,7 +62,7 @@ public class SampleSceneSetup2D : MonoBehaviour
         ai.minActionInterval = 2f;
         ai.maxActionInterval = 4f;
         ai.chargeDuration = 0.5f;
-        ai.approachDistance = 0.4f;
+        ai.approachDistance = 0.8f;  // 踏み込み時にこの距離まで詰める
         ai.moveSpeed = 1.5f;
         CharacterSpriteAnimator2D enemyAnim = GetOrAddComponent<CharacterSpriteAnimator2D>(enemy);
         enemyAnim.characterSkin = "Enemy-Punk";
