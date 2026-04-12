@@ -66,9 +66,10 @@ public class SampleSceneSetup2D : MonoBehaviour
         ai.moveSpeed = 1.5f;
         CharacterSpriteAnimator2D enemyAnim = GetOrAddComponent<CharacterSpriteAnimator2D>(enemy);
         enemyAnim.characterSkin = "Enemy-Punk";
-        // FlipX=true で右側のキャラクターを左向き（プレイヤーと向き合う）
+        // Enemy-Punk は元から左向きなのでフリップ不要
+        // （Brawler-Girl に戻す場合は flipX = true に変更）
         SpriteRenderer enemySr = enemy.GetComponent<SpriteRenderer>();
-        if (enemySr != null) enemySr.flipX = true;
+        if (enemySr != null) enemySr.flipX = false;
         return enemyStateMachine;
     }
 
