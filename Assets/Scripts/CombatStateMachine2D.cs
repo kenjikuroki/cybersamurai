@@ -13,7 +13,7 @@ public abstract class CombatStateMachine2D : MonoBehaviour, ICombatStateActor
     public float deadDuration = -1f;
 
     [Header("Judgment Timing")]
-    public float attackJudgmentTime = 0.5f;   // Attack 開始から判定が発生するまでの秒数
+    public float attackJudgmentTime = 0.25f;  // Attack 開始から判定が発生するまでの秒数（Jab 3フレーム×8fps のヒット瞬間に合わせる）
     public float parryJudgmentTime  = 0.3f;   // Parry  開始から判定が発生するまでの秒数
 
     /// <summary>

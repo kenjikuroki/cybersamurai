@@ -5,11 +5,11 @@ public class JankenCombatResolver2D : MonoBehaviour
     public float clashThresholdSeconds = 0.2f;
 
     [Header("SF3-Style Parry Timing")]
-    [Tooltip("攻撃開始からこの秒数以前のパリィ入力は早すぎてGuard扱いになる")]
-    public float parryWindowStart = 0.2f;
+    [Tooltip("攻撃開始からこの秒数以前のパリィ入力は早すぎて失敗")]
+    public float parryWindowStart = 0.1f;
 
-    [Tooltip("攻撃開始からこの秒数以降のパリィ入力は遅すぎてDead扱いになる")]
-    public float parryWindowEnd = 0.3f;
+    [Tooltip("攻撃開始からこの秒数以降のパリィ入力は遅すぎてDead（attackJudgmentTime 以下にすること）")]
+    public float parryWindowEnd = 0.2f;
 
     [Tooltip("パリィ成功時に攻撃側が受けるVulnerable状態の持続秒数")]
     public float attackerVulnerableDuration = 0.5f;
