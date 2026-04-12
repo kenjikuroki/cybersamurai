@@ -129,7 +129,7 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
             case CombatStateType.Vulnerable:
             case CombatStateType.GuardBreak:
             case CombatStateType.Dead:
-                PlayAnimation(hurtSprites, loop: true);
+                PlayAnimation(hurtSprites, loop: false);  // 1回再生して最終フレームで停止
                 break;
 
             default:
