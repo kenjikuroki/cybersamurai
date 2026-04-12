@@ -17,6 +17,9 @@ public class JankenCombatResolver2D : MonoBehaviour
     [Tooltip("パリィ成功時にパリィ側が受けるVulnerable状態の持続秒数（0 = 隙なし）")]
     public float parrierVulnerableDuration = 0.2f;
 
+    [Tooltip("パリィ失敗（早すぎ）時にパリィ側が受けるVulnerable状態の持続秒数")]
+    public float earlyParryVulnerableDuration = 0.3f;
+
     public CombatResolutionResult Resolve(ICombatStateActor initiator, ICombatStateActor receiver)
     {
         if (initiator == null || receiver == null)
@@ -184,14 +187,18 @@ public class JankenCombatResolver2D : MonoBehaviour
         // ── 早すぎ（delay < parryWindowStart）────────────────────────────────
         if (delay < parryWindowStart)
         {
-            Debug.Log($"[Parry] Too EARLY: delay={delay:F3}s (window={parryWindowStart}~{parryWindowEnd}s) → Guard扱い", this);
+            Debug.Log($"[Parry] Too EARLY: delay={delay:F3}s (window={parryWindowStart}~{parryWindowEnd}s) → {earlyParryVulnerableDuration}s Vulnerable", this);
 
-            // パリィをGuardにキャンセルし、次の攻撃判定でGuard consumeさせる
+            // パリィ失敗：earlyParryVulnerableDuration 秒の隙が発生する
             var parrierSM = parrier as CombatStateMachine2D;
-            parrierSM?.CancelToNeutral();
+            if (parrierSM != null && earlyParryVulnerableDuration > 0f)
+                parrierSM.TriggerVulnerableWithDuration(earlyParryVulnerableDuration);
+            else
+                parrierSM?.CancelToNeutral();
 
-            // NoEffect を返すことで lastResolutionTime を更新しない
-            // → 攻撃判定（Attack vs Guard）が正常に発火できる
+            // NoEffect を返すことで lastResolutionTime を更新しない。
+            // → 続く攻撃判定（Attack vs Vulnerable）が cooldown にブロックされず
+            //   正常に発火し、Vulnerable 中なら Dead を処理できる。
             return CombatResolutionResult.NoEffect;
         }
 
