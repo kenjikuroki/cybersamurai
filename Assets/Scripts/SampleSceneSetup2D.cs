@@ -64,7 +64,8 @@ public class SampleSceneSetup2D : MonoBehaviour
         ai.chargeDuration = 0.5f;
         ai.approachDistance = 0.4f;
         ai.moveSpeed = 1.5f;
-        GetOrAddComponent<CharacterSpriteAnimator2D>(enemy);
+        CharacterSpriteAnimator2D enemyAnim = GetOrAddComponent<CharacterSpriteAnimator2D>(enemy);
+        enemyAnim.characterSkin = "Enemy-Punk";
         // FlipX=true で右側のキャラクターを左向き（プレイヤーと向き合う）
         SpriteRenderer enemySr = enemy.GetComponent<SpriteRenderer>();
         if (enemySr != null) enemySr.flipX = true;

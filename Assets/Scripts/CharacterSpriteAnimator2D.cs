@@ -7,16 +7,19 @@ using UnityEngine;
 /// 状態マッピング:
 ///   Guard                            → Idle（ループ）
 ///   Idle（移動中）                    → Walk（ループ）
-///   Attack                           → Jab（1回再生）
-///   Feint                            → Punch（1回再生）
-///   Parry                            → Jump_kick（1回再生）
+///   Attack                           → Jab → なければ Punch（1回再生）
+///   Feint                            → Punch → なければ Idle（1回再生）
+///   Parry                            → Jump_kick → なければ Idle（1回再生）
 ///   Vulnerable / GuardBreak / Dead   → Hurt（ループ）
-///   ガードヒット時（一時）            → Kick 先頭2枚
+///   ガードヒット時（一時）            → Kick 先頭2枚 → なければ Hurt 先頭2枚
 /// </summary>
 [RequireComponent(typeof(SpriteRenderer))]
 [RequireComponent(typeof(CombatStateMachine2D))]
 public class CharacterSpriteAnimator2D : MonoBehaviour
 {
+    [Tooltip("使用するキャラクタースキンのフォルダ名（例: Brawler-Girl / Enemy-Punk）")]
+    public string characterSkin = "Brawler-Girl";
+
     [Tooltip("Idle / Walk / Hurt などループ系のフレームレート")]
     public float frameRate = 8f;
 
@@ -37,17 +40,11 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
     private Sprite[] currentSprites;
     private int      currentFrame;
     private float    frameTimer;
-    private float    currentFrameRate;   // 現在の再生レート（アニメごとに可変）
-    private bool     loopAnimation;      // true=ループ / false=最終フレームで停止
+    private float    currentFrameRate;
+    private bool     loopAnimation;
 
     private CombatStateType lastState = (CombatStateType)(-1);
     private float guardReactionTimer;
-
-    private static readonly string[] BrawlerRoots =
-    {
-        "StreetsOfFight/Sprites/Brawler-Girl",
-        "Streets of Fight/Sprites/Brawler-Girl",
-    };
 
     // -----------------------------------------------------------------------
 
@@ -59,27 +56,29 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
 
     private void Start()
     {
-        idleSprites          = LoadFolder("Idle");
-        walkSprites          = LoadFolder("Walk");
-        attackSprites        = LoadFolder("Jab");
-        feintSprites         = LoadFolder("Punch");
-        parrySprites         = LoadFolder("Jump_kick");
-        hurtSprites          = LoadFolder("Hurt");
-        guardReactionSprites = LoadFolder("Kick", maxFrames: 2);
+        idleSprites  = Load("Idle");
+        walkSprites  = Load("Walk");
+        hurtSprites  = Load("Hurt");
+
+        // アニメーションがない場合は代替フォルダにフォールバック
+        attackSprites        = FirstNonEmpty(Load("Jab"),       Load("Punch"));
+        feintSprites         = FirstNonEmpty(Load("Punch"),     Load("Idle"));
+        parrySprites         = FirstNonEmpty(Load("Jump_kick"), Load("Idle"));
+        guardReactionSprites = FirstNonEmpty(Load("Kick",  maxFrames: 2),
+                                             Load("Hurt",  maxFrames: 2));
 
         PlayAnimation(idleSprites, loop: true);
     }
 
     private void Update()
     {
-        // ガードリアクション中
         if (guardReactionTimer > 0f)
         {
             guardReactionTimer -= Time.deltaTime;
             if (guardReactionTimer <= 0f)
             {
                 guardReactionTimer = 0f;
-                lastState = (CombatStateType)(-1); // 強制リフレッシュ
+                lastState = (CombatStateType)(-1);
             }
             else
             {
@@ -94,17 +93,11 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
 
     // -----------------------------------------------------------------------
 
-    /// <summary>
-    /// GuardGauge.ConsumeGuard() から呼ぶ。
-    /// ガードが削られた瞬間に一時的にガードリアクションアニメを再生する。
-    /// </summary>
     public void TriggerGuardReaction()
     {
         if (guardReactionSprites == null || guardReactionSprites.Length == 0) return;
         guardReactionTimer = guardReactionSeconds;
-        PlayAnimation(guardReactionSprites,
-                      duration: guardReactionSeconds,
-                      loop: true);
+        PlayAnimation(guardReactionSprites, duration: guardReactionSeconds, loop: true);
     }
 
     // -----------------------------------------------------------------------
@@ -117,8 +110,6 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
 
         switch (current)
         {
-            // ── アクション系：固定fps で1回再生し最終フレームで停止 ──
-            // （ステート持続時間でフレームを引き伸ばさない）
             case CombatStateType.Attack:
                 PlayAnimation(attackSprites, loop: false);
                 break;
@@ -131,19 +122,16 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
                 PlayAnimation(parrySprites, loop: false);
                 break;
 
-            // ── 移動 ──
             case CombatStateType.Idle:
                 PlayAnimation(walkSprites, loop: true);
                 break;
 
-            // ── ダメージ系 ──
             case CombatStateType.Vulnerable:
             case CombatStateType.GuardBreak:
             case CombatStateType.Dead:
                 PlayAnimation(hurtSprites, loop: true);
                 break;
 
-            // ── 通常待機（Guard） ──
             default:
                 PlayAnimation(idleSprites, loop: true);
                 break;
@@ -152,12 +140,6 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
 
     // -----------------------------------------------------------------------
 
-    /// <summary>
-    /// アニメーションを開始する。
-    /// duration > 0 のとき「フレーム数 ÷ duration」でフレームレートを算出し、
-    /// ステート終了と同時にアニメが完了するよう同期する。
-    /// duration 未指定のときはデフォルトの frameRate を使用。
-    /// </summary>
     private void PlayAnimation(Sprite[] sprites, float duration = -1f, bool loop = true)
     {
         currentSprites = sprites;
@@ -166,9 +148,9 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
         loopAnimation  = loop;
 
         if (sprites != null && sprites.Length > 0 && duration > 0f)
-            currentFrameRate = sprites.Length / duration;   // 同期レート
+            currentFrameRate = sprites.Length / duration;
         else
-            currentFrameRate = frameRate;                   // デフォルトレート
+            currentFrameRate = frameRate;
 
         if (currentSprites != null && currentSprites.Length > 0)
             spriteRenderer.sprite = currentSprites[0];
@@ -186,29 +168,43 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
             frameTimer -= frameDuration;
 
             if (loopAnimation)
-            {
                 currentFrame = (currentFrame + 1) % currentSprites.Length;
-            }
-            else
-            {
-                // 非ループ：最終フレームで停止
-                if (currentFrame < currentSprites.Length - 1)
-                    currentFrame++;
-            }
+            else if (currentFrame < currentSprites.Length - 1)
+                currentFrame++;
 
             spriteRenderer.sprite = currentSprites[currentFrame];
         }
     }
 
     // -----------------------------------------------------------------------
-    // PNG 直接ロード（System.IO / AssetDatabase 不要）
+    // スキン別 PNG ロード
     // -----------------------------------------------------------------------
 
-    private static Sprite[] LoadFolder(string folderName, int maxFrames = int.MaxValue)
+    /// <summary>指定フォルダを characterSkin のパスから読み込む。</summary>
+    private Sprite[] Load(string folderName, int maxFrames = int.MaxValue)
+    {
+        return LoadFolder(characterSkin, folderName, maxFrames);
+    }
+
+    /// <summary>candidates の中で最初に要素を持つ配列を返す。すべて空なら空配列。</summary>
+    private static Sprite[] FirstNonEmpty(params Sprite[][] candidates)
+    {
+        foreach (var arr in candidates)
+            if (arr != null && arr.Length > 0) return arr;
+        return System.Array.Empty<Sprite>();
+    }
+
+    private static Sprite[] LoadFolder(string skin, string folderName, int maxFrames = int.MaxValue)
     {
         string dataPath = Application.dataPath;
 
-        foreach (string root in BrawlerRoots)
+        string[] roots =
+        {
+            $"StreetsOfFight/Sprites/{skin}",
+            $"Streets of Fight/Sprites/{skin}",
+        };
+
+        foreach (string root in roots)
         {
             string folderPath = Path.Combine(dataPath, root, folderName)
                                     .Replace('/', Path.DirectorySeparatorChar);
@@ -230,12 +226,12 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
 
             if (sprites.Count > 0)
             {
-                Debug.Log($"[CSA] {folderName}: {sprites.Count}枚 ({folderPath})");
+                Debug.Log($"[CSA:{skin}] {folderName}: {sprites.Count}枚 ({folderPath})");
                 return sprites.ToArray();
             }
         }
 
-        Debug.LogWarning($"[CSA] '{folderName}' が見つかりません。dataPath={Application.dataPath}");
+        Debug.LogWarning($"[CSA:{skin}] '{folderName}' が見つかりません。");
         return System.Array.Empty<Sprite>();
     }
 
