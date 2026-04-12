@@ -14,6 +14,9 @@ public class JankenCombatResolver2D : MonoBehaviour
     [Tooltip("パリィ成功時に攻撃側が受けるVulnerable状態の持続秒数")]
     public float attackerVulnerableDuration = 0.5f;
 
+    [Tooltip("パリィ成功時にパリィ側が受けるVulnerable状態の持続秒数（0 = 隙なし）")]
+    public float parrierVulnerableDuration = 0.2f;
+
     public CombatResolutionResult Resolve(ICombatStateActor initiator, ICombatStateActor receiver)
     {
         if (initiator == null || receiver == null)
@@ -212,9 +215,12 @@ public class JankenCombatResolver2D : MonoBehaviour
         else
             attacker.ChangeState(CombatStateType.Vulnerable);
 
-        // パリィ側: 即座にニュートラルへ戻す（連続パリィ可能）
+        // パリィ側: parrierVulnerableDuration 秒の隙（0以下なら即フリー）
         var successParrierSM = parrier as CombatStateMachine2D;
-        successParrierSM?.CancelToNeutral();
+        if (successParrierSM != null && parrierVulnerableDuration > 0f)
+            successParrierSM.TriggerVulnerableWithDuration(parrierVulnerableDuration);
+        else
+            successParrierSM?.CancelToNeutral();
 
         // 攻撃側が Vulnerable になった → InitiatorVulnerable or ReceiverVulnerable
         // parrierIsReceiver = true  → attacker = initiator → InitiatorVulnerable
