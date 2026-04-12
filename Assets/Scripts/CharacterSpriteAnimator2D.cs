@@ -5,11 +5,11 @@ using UnityEngine;
 
 /// <summary>
 /// 状態マッピング:
-///   Guard / Parry                    → Idle（ループ）
+///   Guard                            → Idle（ループ）
 ///   Idle（移動中）                    → Walk（ループ）
-///   Attack                           → Jab（ステート持続時間に同期、1回再生）
-///   Feint                            → Punch（ステート持続時間に同期、1回再生）
-///   Parry                            → Idle（ステート持続時間に同期、1回再生）
+///   Attack                           → Jab（1回再生）
+///   Feint                            → Punch（1回再生）
+///   Parry                            → Jump_kick（1回再生）
 ///   Vulnerable / GuardBreak / Dead   → Hurt（ループ）
 ///   ガードヒット時（一時）            → Kick 先頭2枚
 /// </summary>
@@ -30,6 +30,7 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
     private Sprite[] walkSprites;
     private Sprite[] attackSprites;
     private Sprite[] feintSprites;
+    private Sprite[] parrySprites;
     private Sprite[] hurtSprites;
     private Sprite[] guardReactionSprites;
 
@@ -62,6 +63,7 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
         walkSprites          = LoadFolder("Walk");
         attackSprites        = LoadFolder("Jab");
         feintSprites         = LoadFolder("Punch");
+        parrySprites         = LoadFolder("Jump_kick");
         hurtSprites          = LoadFolder("Hurt");
         guardReactionSprites = LoadFolder("Kick", maxFrames: 2);
 
@@ -126,7 +128,7 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
                 break;
 
             case CombatStateType.Parry:
-                PlayAnimation(idleSprites, loop: false);
+                PlayAnimation(parrySprites, loop: false);
                 break;
 
             // ── 移動 ──
