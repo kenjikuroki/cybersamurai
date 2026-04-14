@@ -21,7 +21,7 @@ public class PlayerStateMachine2D : CombatStateMachine2D
 
     protected override bool QueryPrimaryInput()
     {
-        // ガード解除：左右移動
+        // ガード解除：左右移動のみ
         var kb = Keyboard.current;
         if (kb != null)
         {
@@ -30,11 +30,11 @@ public class PlayerStateMachine2D : CombatStateMachine2D
                 return true;
         }
 
+        // ゲームパッド：スティック横 or 十字キー横
         var gp = Gamepad.current;
         if (gp != null)
         {
-            float stickX = gp.leftStick.x.ReadValue();
-            if (Mathf.Abs(stickX) > 0.2f) return true;
+            if (Mathf.Abs(gp.leftStick.x.ReadValue()) > 0.2f) return true;
             if (gp.dpad.left.isPressed || gp.dpad.right.isPressed) return true;
         }
 

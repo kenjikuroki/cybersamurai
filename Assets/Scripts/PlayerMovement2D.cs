@@ -6,10 +6,10 @@ public class PlayerMovement2D : MonoBehaviour
 {
     public float moveSpeed = 5f;
 
-    [Tooltip("前進（敵に近づく）時の速度倍率")]
+    [Tooltip("前進（敵に近づく）時の速度倍率。moveSpeed に掛け合わせる。")]
     public float forwardSpeedMultiplier  = 0.5f;
 
-    [Tooltip("後退（敵から離れる）時の速度倍率")]
+    [Tooltip("後退（敵から離れる）時の速度倍率。moveSpeed に掛け合わせる。")]
     public float backwardSpeedMultiplier = 0.333f;
 
     [Tooltip("スティック入力のデッドゾーン")]
@@ -69,10 +69,9 @@ public class PlayerMovement2D : MonoBehaviour
         return movingTowardEnemy ? forwardMoveSpeed : backwardMoveSpeed;
     }
 
-    // -------------------------------------------------------------------------
-
     public static float GetHorizontalInput(float deadzone = 0.2f)
     {
+        // キーボード
         var kb = Keyboard.current;
         if (kb != null)
         {
@@ -81,6 +80,7 @@ public class PlayerMovement2D : MonoBehaviour
             if (left != right) return left ? -1f : 1f;
         }
 
+        // ゲームパッド（左スティック＋十字キー）
         var gp = Gamepad.current;
         if (gp != null)
         {
