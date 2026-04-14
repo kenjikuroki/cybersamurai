@@ -205,9 +205,13 @@ public abstract class CombatStateMachine2D : MonoBehaviour, ICombatStateActor
         IsAttackJudgmentFired     = false;
         vulnerableDurationOverride = -1f;
         ResetCombo();
-        // Rigidbody2D を Dynamic に戻す
+        // Rigidbody2D を Dynamic に戻す（gravityScale は疑似3D用に 0 のまま維持）
         Rigidbody2D rb = GetComponent<Rigidbody2D>();
-        if (rb != null) rb.bodyType = RigidbodyType2D.Dynamic;
+        if (rb != null)
+        {
+            rb.bodyType     = RigidbodyType2D.Dynamic;
+            rb.gravityScale = 0f;
+        }
         // コライダーをトリガーから通常に戻す
         Collider2D col = GetComponent<Collider2D>();
         if (col != null) col.isTrigger = false;

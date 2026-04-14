@@ -7,17 +7,27 @@ public class PlayerMovement2D : MonoBehaviour
     public float moveSpeed = 5f;
 
     [Tooltip("前進（敵に近づく）時の速度倍率。moveSpeed に掛け合わせる。")]
-    public float forwardSpeedMultiplier  = 0.5f;   // 前 = 今の半分
+    public float forwardSpeedMultiplier  = 0.5f;
 
     [Tooltip("後退（敵から離れる）時の速度倍率。moveSpeed に掛け合わせる。")]
-    public float backwardSpeedMultiplier = 0.333f;  // 後ろ = 今の3分の1
+    public float backwardSpeedMultiplier = 0.333f;
 
-    private Rigidbody2D         rb;
+    [Tooltip("上下（奥行き）移動の速度")]
+    public float verticalSpeed = 2.5f;
+
+    [Tooltip("移動できるY座標の下限（手前）")]
+    public float minY = -0.7f;
+
+    [Tooltip("移動できるY座標の上限（奥）")]
+    public float maxY =  0.4f;
+
+    private Rigidbody2D          rb;
     private CombatStateMachine2D stateMachine;
-    private Transform           enemyTransform;     // 前進・後退判定に使う
-    private float               horizontalInput;
-    private float               forwardMoveSpeed;
-    private float               backwardMoveSpeed;
+    private Transform            enemyTransform;
+    private float                horizontalInput;
+    private float                verticalInput;
+    private float                forwardMoveSpeed;
+    private float                backwardMoveSpeed;
 
     private void Awake()
     {
@@ -47,23 +57,30 @@ public class PlayerMovement2D : MonoBehaviour
         if (stateMachine != null && stateMachine.IsMovementLocked)
         {
             horizontalInput = 0f;
-            rb.linearVelocity = new Vector2(0f, rb.linearVelocity.y);
+            verticalInput   = 0f;
+            rb.linearVelocity = Vector2.zero;
             return;
         }
 
         horizontalInput = GetHorizontalInput();
+        verticalInput   = GetVerticalInput();
     }
 
     private void FixedUpdate()
     {
-        if (horizontalInput == 0f)
-        {
-            rb.linearVelocity = new Vector2(0f, rb.linearVelocity.y);
-            return;
-        }
+        float hSpeed = horizontalInput == 0f ? 0f : CalcSpeed(horizontalInput);
+        float vSpeed = verticalInput * verticalSpeed;
 
-        float speed = CalcSpeed(horizontalInput);
-        rb.linearVelocity = new Vector2(horizontalInput * speed, rb.linearVelocity.y);
+        rb.linearVelocity = new Vector2(horizontalInput * hSpeed, vSpeed);
+
+        // Y座標をクランプ（疑似3D の移動範囲）
+        Vector2 pos = rb.position;
+        if (pos.y < minY || pos.y > maxY)
+        {
+            pos.y         = Mathf.Clamp(pos.y, minY, maxY);
+            rb.position   = pos;
+            rb.linearVelocity = new Vector2(rb.linearVelocity.x, 0f);
+        }
     }
 
     /// <summary>
@@ -90,5 +107,18 @@ public class PlayerMovement2D : MonoBehaviour
 
         if (moveLeft == moveRight) return 0f;
         return moveLeft ? -1f : 1f;
+    }
+
+    private static float GetVerticalInput()
+    {
+        Keyboard keyboard = Keyboard.current;
+        if (keyboard == null) return 0f;
+
+        // W/S で奥行き移動（上下矢印はガード判定と分離するためW/Sのみ）
+        bool moveUp   = keyboard.wKey.isPressed;
+        bool moveDown = keyboard.sKey.isPressed;
+
+        if (moveUp == moveDown) return 0f;
+        return moveUp ? 1f : -1f;
     }
 }

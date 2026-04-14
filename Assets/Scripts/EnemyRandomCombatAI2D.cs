@@ -83,7 +83,21 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
     [Tooltip("間合い調整時の移動速度（踏み込みより遅くする）")]
     public float maaiMoveSpeed = 0.7f;
 
+    [Header("Pseudo-3D（奥行き移動）")]
+    [Tooltip("プレイヤーのY座標に追従する速度")]
+    public float yTrackingSpeed = 1.5f;
+    [Tooltip("Y追従の許容誤差（この範囲内なら動かない）")]
+    public float yTrackingTolerance = 0.15f;
+    [Tooltip("移動できるY座標の下限")]
+    public float minY = -0.7f;
+    [Tooltip("移動できるY座標の上限")]
+    public float maxY =  0.4f;
+
     public MonoBehaviour targetActorSource;
+
+    // スタンバイモード（待機中の敵）
+    public bool IsStandby { get; private set; } = false;
+    private Vector3 standbyTarget;
 
     // -------------------------------------------------------------------------
 
@@ -299,6 +313,13 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
     {
         if (enemyStateMachine == null) return;
 
+        // ── スタンバイモード（待機中）──────────────────────────────────────────
+        if (IsStandby)
+        {
+            MoveTowardXY(standbyTarget, maaiMoveSpeed);
+            return;
+        }
+
         ResolveTarget();
         if (targetTransform == null) { StopMovement(); return; }
 
@@ -456,6 +477,9 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
             return;
         }
 
+        // ── Y追従（プレイヤーの奥行きに合わせる）─────────────────────────────
+        TrackTargetY();
+
         // 間合い管理
         float inner = maaiDistance - maaiTolerance;
         float outer = maaiDistance + maaiTolerance;
@@ -512,6 +536,24 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
     {
         targetActor     = newTarget;
         targetTransform = (newTarget as Component)?.transform;
+    }
+
+    /// <summary>スタンバイモードの切り替え。true=待機、false=戦闘。</summary>
+    public void SetStandbyMode(bool standby)
+    {
+        IsStandby = standby;
+        if (standby)
+        {
+            // 待機に入ったらスケジュールをリセットして遠ざかる
+            ScheduleNextAction();
+            StopMovement();
+        }
+    }
+
+    /// <summary>スタンバイ中の目標位置を MultiEnemyManager から設定される。</summary>
+    public void SetStandbyTarget(Vector3 target)
+    {
+        standbyTarget = target;
     }
 
     // -------------------------------------------------------------------------
@@ -796,6 +838,41 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
         if (targetTransform != null)
             prevDistToTarget = Mathf.Abs(targetTransform.position.x - transform.position.x);
         Debug.Log($"[{enemyType}] Post-attack retreat start (maai={maaiDistance:F1})", this);
+    }
+
+    /// <summary>プレイヤーの Y 座標に緩やかに追従する（戦闘中も常時動く）。</summary>
+    private void TrackTargetY()
+    {
+        if (targetTransform == null || rb == null) return;
+        float dy = targetTransform.position.y - transform.position.y;
+        if (Mathf.Abs(dy) <= yTrackingTolerance) return;
+
+        float vy = Mathf.Sign(dy) * yTrackingSpeed;
+        rb.linearVelocity = new Vector2(rb.linearVelocity.x, vy);
+
+        // Y クランプ
+        Vector2 pos = rb.position;
+        pos.y = Mathf.Clamp(pos.y, minY, maxY);
+        rb.position = pos;
+    }
+
+    /// <summary>XY 両方向に目標へ移動する（スタンバイ移動用）。</summary>
+    private void MoveTowardXY(Vector3 destination, float speed)
+    {
+        Vector2 delta = (Vector2)(destination - transform.position);
+        if (delta.magnitude <= 0.05f) { StopMovement(); return; }
+        if (rb != null)
+            rb.linearVelocity = delta.normalized * speed;
+        else
+            transform.position = Vector3.MoveTowards(transform.position, destination, speed * Time.deltaTime);
+
+        // Y クランプ
+        if (rb != null)
+        {
+            Vector2 pos = rb.position;
+            pos.y = Mathf.Clamp(pos.y, minY, maxY);
+            rb.position = pos;
+        }
     }
 
     private void MoveToward(Vector3 destination, float speed)

@@ -9,6 +9,9 @@ public class ProximityJankenBattle2D : MonoBehaviour
 
     [Tooltip("キャラクター間の最小距離（これより近づくと強制的に押し離す）")]
     public float minSeparationDistance = 0.42f;
+
+    [Tooltip("Y方向（奥行き）の攻撃が届く最大差。これより離れると攻撃が当たらない。")]
+    public float yAttackTolerance = 0.45f;
     public BattlePresentation2D presentation;
 
     private ICombatStateActor playerActor;
@@ -137,8 +140,10 @@ public class ProximityJankenBattle2D : MonoBehaviour
             playerComponent.transform.position,
             enemyComponent.transform.position);
 
-        // 射程外なら判定しない（近すぎは EnforceSeparation で物理的に防止）
-        if (distance > resolveDistance) return;
+        // X方向の射程外なら判定しない
+        float dx = Mathf.Abs(playerComponent.transform.position.x - enemyComponent.transform.position.x);
+        float dy = Mathf.Abs(playerComponent.transform.position.y - enemyComponent.transform.position.y);
+        if (dx > resolveDistance || dy > yAttackTolerance) return;
 
         CombatStateType playerStateBefore = playerActor.CurrentStateType;
         CombatStateType enemyStateBefore  = enemyActor.CurrentStateType;

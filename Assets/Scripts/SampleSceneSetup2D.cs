@@ -10,30 +10,44 @@ public class SampleSceneSetup2D : MonoBehaviour
         GetOrAddComponent<HitstopManager>(gameObject);
         SetupMainCamera();
         PlayerStateMachine2D playerState = SetupPlayer();
-        EnemyStateMachine2D enemyState = SetupEnemy(playerState);
-        SetupGround();
-        SetupBattle(playerState, enemyState);
 
-        EnemyRandomCombatAI2D enemyAi = enemyState.GetComponent<EnemyRandomCombatAI2D>();
-        if (enemyAi != null)
+        // 複数の敵を生成
+        var enemyTypes = new EnemyType[] { EnemyType.Attacker, EnemyType.Rusher, EnemyType.Careful };
+        var enemyStates = new System.Collections.Generic.List<EnemyStateMachine2D>();
+        var enemyAIs    = new System.Collections.Generic.List<EnemyRandomCombatAI2D>();
+
+        for (int i = 0; i < enemyTypes.Length; i++)
         {
-            enemyAi.targetActorSource = playerState;
+            float startX = 0.5f + i * 0.1f; // 初期位置は少しずらす
+            float startY = -0.2f * i;        // Y方向もずらして重ならないように
+            var es = SetupEnemy(playerState, $"Enemy{i + 1}", enemyTypes[i],
+                                new Vector3(startX, startY, 0f));
+            enemyStates.Add(es);
+            enemyAIs.Add(es.GetComponent<EnemyRandomCombatAI2D>());
         }
 
+        SetupGround();
+        ProximityJankenBattle2D battle = SetupBattle(playerState, enemyStates[0]);
+
+        // MultiEnemyManager のセットアップ
+        MultiEnemyManager multiMgr = GetOrAddComponent<MultiEnemyManager>(gameObject);
+        multiMgr.Setup(playerState, enemyAIs, battle);
+
+        // スタンバイ敵（2体目以降）を待機モードに
+        for (int i = 1; i < enemyAIs.Count; i++)
+            enemyAIs[i].SetStandbyMode(true);
+
+        // 先頭の敵のガードゲージだけUI表示（後で複数対応可）
         GuardGauge playerGuard = playerState.GetComponent<GuardGauge>();
-        GuardGauge enemyGuard = enemyState.GetComponent<GuardGauge>();
+        GuardGauge enemyGuard  = enemyStates[0].GetComponent<GuardGauge>();
         Canvas canvas = SetupGuardGaugeUI(playerGuard, enemyGuard);
         BattlePresentation2D presentation = SetupBattlePresentation(canvas);
         GetComponent<ProximityJankenBattle2D>().presentation = presentation;
-        SetupRoundManager(playerState, enemyState, playerGuard, enemyGuard, canvas);
+        SetupRoundManager(playerState, enemyStates[0], playerGuard, enemyGuard, canvas);
 
-        // テスト用敵タイプ切り替えUI
-        EnemyRandomCombatAI2D enemyAIForUI = enemyState.GetComponent<EnemyRandomCombatAI2D>();
-        if (enemyAIForUI != null)
-        {
-            EnemyTypeTestUI testUI = GetOrAddComponent<EnemyTypeTestUI>(gameObject);
-            testUI.Setup(enemyAIForUI);
-        }
+        // タイプ切り替えUI（最初のアクティブ敵）
+        EnemyTypeTestUI testUI = GetOrAddComponent<EnemyTypeTestUI>(gameObject);
+        testUI.Setup(enemyAIs[0]);
     }
 
     private PlayerStateMachine2D SetupPlayer()
@@ -53,6 +67,14 @@ public class SampleSceneSetup2D : MonoBehaviour
         visual.isPlayer = true;
         GetOrAddComponent<CharacterSpriteAnimator2D>(player);
 
+        // 疑似3D：Y移動設定
+        PlayerMovement2D movement = GetOrAddComponent<PlayerMovement2D>(player);
+        movement.minY = -0.7f;
+        movement.maxY =  0.4f;
+        PseudoZ playerPZ = GetOrAddComponent<PseudoZ>(player);
+        playerPZ.minY = -0.7f;
+        playerPZ.maxY =  0.4f;
+
         // プレイヤーはフェイント後に隙なし（フェイントは攻撃のための布石として使える）
         // 敵は SetupActionDurations で設定した 0.3f のまま維持
         stateMachine.feintWhiffVulnerableDuration = 0f;
@@ -68,9 +90,13 @@ public class SampleSceneSetup2D : MonoBehaviour
         return stateMachine;
     }
 
-    private EnemyStateMachine2D SetupEnemy(PlayerStateMachine2D playerState)
+    private EnemyStateMachine2D SetupEnemy(PlayerStateMachine2D playerState,
+                                            string objectName = "Enemy",
+                                            EnemyType type = EnemyType.Attacker,
+                                            Vector3? startPos = null)
     {
-        GameObject enemy = FindOrCreate("Enemy", new Vector3(0.5f, 0f, 0f));
+        Vector3 pos = startPos ?? new Vector3(0.5f, 0f, 0f);
+        GameObject enemy = FindOrCreate(objectName, pos);
         enemy.transform.localScale = new Vector3(1f, 1f, 1f);
         // 色はスクリプト(CharacterStateVisual2D)で赤に設定するため白で初期化
         SpriteRenderer spriteRenderer = SetupSpriteRenderer(enemy, Color.white, 1);
@@ -90,12 +116,20 @@ public class SampleSceneSetup2D : MonoBehaviour
         ai.chargeDuration = 0.5f;
         ai.approachDistance = 0.8f;  // 踏み込み時にこの距離まで詰める
         ai.moveSpeed = 1.5f;
-        ai.useFeint = false;         // パリィ調整中はフェイントを使わない
+        ai.useFeint = false;
 
-        // 敵の初期スタッツ（Attacker タイプで開始）
-        ai.SetEnemyType(EnemyType.Attacker);
+        // 疑似3D の Y移動範囲を設定
+        ai.minY = -0.7f;
+        ai.maxY =  0.4f;
+
+        ai.SetEnemyType(type);
         CharacterSpriteAnimator2D enemyAnim = GetOrAddComponent<CharacterSpriteAnimator2D>(enemy);
         enemyAnim.characterSkin = "Enemy-Punk";
+
+        // 疑似3D
+        PseudoZ enemyPZ = GetOrAddComponent<PseudoZ>(enemy);
+        enemyPZ.minY = -0.7f;
+        enemyPZ.maxY =  0.4f;
         // Enemy-Punk は元から左向きなのでフリップ不要
         // （Brawler-Girl に戻す場合は flipX = true に変更）
         SpriteRenderer enemySr = enemy.GetComponent<SpriteRenderer>();
@@ -124,7 +158,7 @@ public class SampleSceneSetup2D : MonoBehaviour
         groundCollider.offset = Vector2.zero;
     }
 
-    private void SetupBattle(PlayerStateMachine2D playerState, EnemyStateMachine2D enemyState)
+    private ProximityJankenBattle2D SetupBattle(PlayerStateMachine2D playerState, EnemyStateMachine2D enemyState)
     {
         JankenCombatResolver2D resolver = GetOrAddComponent<JankenCombatResolver2D>(gameObject);
         // パリィ受付ウィンドウ（attackJudgmentTime=0.5f に対して 0〜0.45s）
@@ -135,11 +169,13 @@ public class SampleSceneSetup2D : MonoBehaviour
         resolver.earlyParryVulnerableDuration= 0.0f;   // 早すぎペナルティなし
 
         ProximityJankenBattle2D battle = GetOrAddComponent<ProximityJankenBattle2D>(gameObject);
-        battle.resolveDistance      = 0.9f;   // approachDistance(0.8f) より少し広めに設定
-        battle.minSeparationDistance = 0.42f; // これより近くなると強制的に押し離す
+        battle.resolveDistance       = 0.9f;
+        battle.minSeparationDistance = 0.42f;
+        battle.yAttackTolerance      = 0.45f; // Y方向の攻撃許容距離
         battle.playerSource = playerState;
-        battle.enemySource = enemyState;
+        battle.enemySource  = enemyState;
         battle.SetActors(playerState, enemyState);
+        return battle;
     }
 
     private Canvas SetupGuardGaugeUI(GuardGauge playerGauge, GuardGauge enemyGauge)
@@ -292,7 +328,7 @@ public class SampleSceneSetup2D : MonoBehaviour
             return;
         }
 
-        mainCamera.orthographicSize = 1f;
+        mainCamera.orthographicSize = 1.8f; // 複数敵が見えるよう少し引く
     }
 
     private static SpriteRenderer SetupSpriteRenderer(GameObject target, Color color, int sortingOrder)
@@ -308,7 +344,7 @@ public class SampleSceneSetup2D : MonoBehaviour
     {
         Rigidbody2D rb = GetOrAddComponent<Rigidbody2D>(target);
         rb.bodyType = RigidbodyType2D.Dynamic;
-        rb.gravityScale = 3f;
+        rb.gravityScale = 0f;   // 疑似3D：重力なし、Y軸を奥行きとして使う
         rb.freezeRotation = true;
         rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
         rb.interpolation = RigidbodyInterpolation2D.Interpolate;

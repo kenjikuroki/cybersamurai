@@ -27,17 +27,13 @@ public class PlayerStateMachine2D : CombatStateMachine2D
             return false;
         }
 
+        // ガード解除は左右移動のみ（W/S は疑似3D移動に使うため除外）
         bool horizontalInput = keyboard.aKey.isPressed
             || keyboard.dKey.isPressed
             || keyboard.leftArrowKey.isPressed
             || keyboard.rightArrowKey.isPressed;
 
-        bool verticalInput = keyboard.wKey.isPressed
-            || keyboard.sKey.isPressed
-            || keyboard.upArrowKey.isPressed
-            || keyboard.downArrowKey.isPressed;
-
-        return horizontalInput || verticalInput;
+        return horizontalInput;
     }
 
     private void HandleActionInput()
