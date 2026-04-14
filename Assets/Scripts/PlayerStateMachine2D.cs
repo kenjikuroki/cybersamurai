@@ -21,47 +21,70 @@ public class PlayerStateMachine2D : CombatStateMachine2D
 
     protected override bool QueryPrimaryInput()
     {
-        Keyboard keyboard = Keyboard.current;
-        if (keyboard == null)
+        // ガード解除：左右移動のみ（W/S は疑似3D移動に使うため除外）
+        // キーボード
+        var kb = Keyboard.current;
+        if (kb != null)
         {
-            return false;
+            if (kb.aKey.isPressed || kb.dKey.isPressed
+             || kb.leftArrowKey.isPressed || kb.rightArrowKey.isPressed)
+                return true;
         }
 
-        // ガード解除は左右移動のみ（W/S は疑似3D移動に使うため除外）
-        bool horizontalInput = keyboard.aKey.isPressed
-            || keyboard.dKey.isPressed
-            || keyboard.leftArrowKey.isPressed
-            || keyboard.rightArrowKey.isPressed;
+        // ゲームパッド：スティック横 or 十字キー横でガード解除
+        var gp = Gamepad.current;
+        if (gp != null)
+        {
+            float stickX = gp.leftStick.x.ReadValue();
+            if (Mathf.Abs(stickX) > 0.2f) return true;
+            if (gp.dpad.left.isPressed || gp.dpad.right.isPressed) return true;
+        }
 
-        return horizontalInput;
+        return false;
     }
 
     private void HandleActionInput()
     {
-        Keyboard keyboard = Keyboard.current;
-        if (keyboard == null)
+        bool attackPressed = false;
+        bool parryPressed  = false;
+        bool feintPressed  = false;
+
+        // ── キーボード ──────────────────────────────────────────────────────
+        var kb = Keyboard.current;
+        if (kb != null)
         {
-            return;
+            attackPressed |= kb.jKey.wasPressedThisFrame;
+            parryPressed  |= kb.kKey.wasPressedThisFrame;
+            feintPressed  |= kb.lKey.wasPressedThisFrame;
         }
 
-        // J キー：Attack 中はコンボバッファとして受け付ける必要があるため
-        // IsActionLocked では弾かない。TriggerAttack() 内部でロック判定を行う。
-        if (keyboard.jKey.wasPressedThisFrame)
+        // ── ゲームパッド ────────────────────────────────────────────────────
+        // PS系:   × = buttonSouth(攻撃)  □ = buttonWest(パリィ)  △ = buttonNorth(フェイント)
+        // Xbox系: A = buttonSouth(攻撃)  X = buttonWest(パリィ)  Y = buttonNorth(フェイント)
+        var gp = Gamepad.current;
+        if (gp != null)
         {
-            Debug.Log("Player Input: J -> Attack", this);
+            attackPressed |= gp.buttonSouth.wasPressedThisFrame; // × / A
+            parryPressed  |= gp.buttonWest.wasPressedThisFrame;  // □ / X
+            feintPressed  |= gp.buttonNorth.wasPressedThisFrame; // △ / Y
+        }
+
+        // ── アクション発火 ──────────────────────────────────────────────────
+        if (attackPressed)
+        {
+            Debug.Log("Player Input: Attack", this);
             TriggerAttack();
         }
 
-        // K / L は Attack/Parry/Feint 中は無効。TriggerParry/Feint() 内のガードに任せる。
-        if (keyboard.kKey.wasPressedThisFrame)
+        if (parryPressed)
         {
-            Debug.Log("Player Input: K -> Parry", this);
+            Debug.Log("Player Input: Parry", this);
             TriggerParry();
         }
 
-        if (keyboard.lKey.wasPressedThisFrame)
+        if (feintPressed)
         {
-            Debug.Log("Player Input: L -> Feint", this);
+            Debug.Log("Player Input: Feint", this);
             TriggerFeint();
         }
     }
@@ -69,9 +92,7 @@ public class PlayerStateMachine2D : CombatStateMachine2D
     private void LogCurrentState(bool force = false)
     {
         if (!force && hasLoggedInitialState && lastLoggedState == CurrentStateType)
-        {
             return;
-        }
 
         lastLoggedState = CurrentStateType;
         hasLoggedInitialState = true;

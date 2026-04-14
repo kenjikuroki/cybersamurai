@@ -21,6 +21,9 @@ public class PlayerMovement2D : MonoBehaviour
     [Tooltip("移動できるY座標の上限（奥）")]
     public float maxY =  0.4f;
 
+    [Tooltip("スティック入力のデッドゾーン")]
+    public float stickDeadzone = 0.2f;
+
     private Rigidbody2D          rb;
     private CombatStateMachine2D stateMachine;
     private Transform            enemyTransform;
@@ -36,7 +39,6 @@ public class PlayerMovement2D : MonoBehaviour
 
     private void Start()
     {
-        // CharacterStats があればそちらの moveSpeed を使う
         CharacterStats stats = GetComponent<CharacterStats>();
         float baseSpeed = (stats != null) ? stats.moveSpeed : moveSpeed;
         moveSpeed         = baseSpeed;
@@ -44,13 +46,13 @@ public class PlayerMovement2D : MonoBehaviour
         backwardMoveSpeed = baseSpeed * backwardSpeedMultiplier;
 
         // 敵オブジェクトを検索（前進・後退の方向判定に使用）
-        GameObject enemy = GameObject.Find("Enemy");
+        GameObject enemy = GameObject.Find("Enemy1");
+        if (enemy == null) enemy = GameObject.Find("Enemy");
         if (enemy != null) enemyTransform = enemy.transform;
     }
 
     private void Update()
     {
-        // 遅延初期化：動的 AddComponent に対応
         if (stateMachine == null)
             stateMachine = GetComponent<CombatStateMachine2D>();
 
@@ -62,8 +64,8 @@ public class PlayerMovement2D : MonoBehaviour
             return;
         }
 
-        horizontalInput = GetHorizontalInput();
-        verticalInput   = GetVerticalInput();
+        horizontalInput = GetHorizontalInput(stickDeadzone);
+        verticalInput   = GetVerticalInput(stickDeadzone);
     }
 
     private void FixedUpdate()
@@ -77,48 +79,69 @@ public class PlayerMovement2D : MonoBehaviour
         Vector2 pos = rb.position;
         if (pos.y < minY || pos.y > maxY)
         {
-            pos.y         = Mathf.Clamp(pos.y, minY, maxY);
-            rb.position   = pos;
+            pos.y             = Mathf.Clamp(pos.y, minY, maxY);
+            rb.position       = pos;
             rb.linearVelocity = new Vector2(rb.linearVelocity.x, 0f);
         }
     }
 
-    /// <summary>
-    /// 入力方向と敵の位置から前進・後退を判定し、対応する速度を返す。
-    /// 敵が不明なら前進速度を使う。
-    /// </summary>
     private float CalcSpeed(float inputDir)
     {
         if (enemyTransform == null) return forwardMoveSpeed;
-
         float toEnemy = enemyTransform.position.x - transform.position.x;
-        // 入力方向と敵方向が同じ符号 → 前進
         bool movingTowardEnemy = (inputDir > 0f) == (toEnemy > 0f);
         return movingTowardEnemy ? forwardMoveSpeed : backwardMoveSpeed;
     }
 
-    private static float GetHorizontalInput()
+    // -------------------------------------------------------------------------
+
+    public static float GetHorizontalInput(float deadzone = 0.2f)
     {
-        Keyboard keyboard = Keyboard.current;
-        if (keyboard == null) return 0f;
+        // キーボード
+        var kb = Keyboard.current;
+        if (kb != null)
+        {
+            bool left  = kb.aKey.isPressed || kb.leftArrowKey.isPressed;
+            bool right = kb.dKey.isPressed || kb.rightArrowKey.isPressed;
+            if (left != right) return left ? -1f : 1f;
+        }
 
-        bool moveLeft  = keyboard.aKey.isPressed || keyboard.leftArrowKey.isPressed;
-        bool moveRight = keyboard.dKey.isPressed || keyboard.rightArrowKey.isPressed;
+        // ゲームパッド（左スティック＋十字キー）
+        var gp = Gamepad.current;
+        if (gp != null)
+        {
+            float stickX = gp.leftStick.x.ReadValue();
+            if (Mathf.Abs(stickX) > deadzone) return Mathf.Sign(stickX);
 
-        if (moveLeft == moveRight) return 0f;
-        return moveLeft ? -1f : 1f;
+            if (gp.dpad.left.isPressed)  return -1f;
+            if (gp.dpad.right.isPressed) return  1f;
+        }
+
+        return 0f;
     }
 
-    private static float GetVerticalInput()
+    public static float GetVerticalInput(float deadzone = 0.2f)
     {
-        Keyboard keyboard = Keyboard.current;
-        if (keyboard == null) return 0f;
+        // キーボード（W/S のみ）
+        var kb = Keyboard.current;
+        if (kb != null)
+        {
+            bool up   = kb.wKey.isPressed;
+            bool down = kb.sKey.isPressed;
+            if (up != down) return up ? 1f : -1f;
+        }
 
-        // W/S で奥行き移動（上下矢印はガード判定と分離するためW/Sのみ）
-        bool moveUp   = keyboard.wKey.isPressed;
-        bool moveDown = keyboard.sKey.isPressed;
+        // ゲームパッド（左スティック上下＋十字キー上下）
+        var gp = Gamepad.current;
+        if (gp != null)
+        {
+            float stickY = gp.leftStick.y.ReadValue();
+            if (Mathf.Abs(stickY) > deadzone) return Mathf.Sign(stickY);
 
-        if (moveUp == moveDown) return 0f;
-        return moveUp ? 1f : -1f;
+            if (gp.dpad.up.isPressed)   return  1f;
+            if (gp.dpad.down.isPressed) return -1f;
+        }
+
+        return 0f;
     }
 }
