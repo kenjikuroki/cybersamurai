@@ -59,14 +59,14 @@ public class PlayerStateMachine2D : CombatStateMachine2D
         }
 
         // ── ゲームパッド ────────────────────────────────────────────────────
-        // PS系:   × = buttonSouth(攻撃)  □ = buttonWest(パリィ)  △ = buttonNorth(フェイント)
-        // Xbox系: A = buttonSouth(攻撃)  X = buttonWest(パリィ)  Y = buttonNorth(フェイント)
+        // Xbox: X = buttonWest(攻撃)  Y = buttonNorth(パリィ)  A = buttonSouth(フェイント)
+        // PS:   □ = buttonWest(攻撃)  △ = buttonNorth(パリィ)  × = buttonSouth(フェイント)
         var gp = Gamepad.current;
         if (gp != null)
         {
-            attackPressed |= gp.buttonSouth.wasPressedThisFrame; // × / A
-            parryPressed  |= gp.buttonWest.wasPressedThisFrame;  // □ / X
-            feintPressed  |= gp.buttonNorth.wasPressedThisFrame; // △ / Y
+            attackPressed |= gp.buttonWest.wasPressedThisFrame;   // Xbox:X / PS:□
+            parryPressed  |= gp.buttonNorth.wasPressedThisFrame;  // Xbox:Y / PS:△
+            feintPressed  |= gp.buttonSouth.wasPressedThisFrame;  // Xbox:A / PS:×
         }
 
         // ── アクション発火 ──────────────────────────────────────────────────

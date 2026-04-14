@@ -18,8 +18,8 @@ public class SampleSceneSetup2D : MonoBehaviour
 
         for (int i = 0; i < enemyTypes.Length; i++)
         {
-            float startX = 0.5f + i * 0.1f; // 初期位置は少しずらす
-            float startY = -0.2f * i;        // Y方向もずらして重ならないように
+            float startX = 0.5f + i * 0.15f;  // 初期位置は少しずらす
+            float startY = -0.2f - i * 0.1f;  // Y範囲内でずらす（-0.2 ～ -0.4）
             var es = SetupEnemy(playerState, $"Enemy{i + 1}", enemyTypes[i],
                                 new Vector3(startX, startY, 0f));
             enemyStates.Add(es);
@@ -28,6 +28,10 @@ public class SampleSceneSetup2D : MonoBehaviour
 
         SetupGround();
         ProximityJankenBattle2D battle = SetupBattle(playerState, enemyStates[0]);
+
+        // プレイヤーの向き先：最初のアクティブ敵（MultiEnemyManager が切り替えてもOK）
+        CharacterFacing playerFacingRef = playerState.GetComponent<CharacterFacing>();
+        if (playerFacingRef != null) playerFacingRef.target = enemyStates[0].transform;
 
         // MultiEnemyManager のセットアップ
         MultiEnemyManager multiMgr = GetOrAddComponent<MultiEnemyManager>(gameObject);
@@ -52,7 +56,7 @@ public class SampleSceneSetup2D : MonoBehaviour
 
     private PlayerStateMachine2D SetupPlayer()
     {
-        GameObject player = FindOrCreate("Player", new Vector3(-0.5f, 0f, 0f));
+        GameObject player = FindOrCreate("Player", new Vector3(-0.5f, -0.3f, 0f));
         player.transform.localScale = new Vector3(1f, 1f, 1f);
         SpriteRenderer spriteRenderer = SetupSpriteRenderer(player, Color.white, 1);
         SetupDynamicBody(player);
@@ -67,13 +71,18 @@ public class SampleSceneSetup2D : MonoBehaviour
         visual.isPlayer = true;
         GetOrAddComponent<CharacterSpriteAnimator2D>(player);
 
-        // 疑似3D：Y移動設定
+        // 疑似3D：Y移動設定（画面下側・狭い範囲）
         PlayerMovement2D movement = GetOrAddComponent<PlayerMovement2D>(player);
-        movement.minY = -0.7f;
-        movement.maxY =  0.4f;
+        movement.minY = -0.55f;
+        movement.maxY = -0.10f;
         PseudoZ playerPZ = GetOrAddComponent<PseudoZ>(player);
-        playerPZ.minY = -0.7f;
-        playerPZ.maxY =  0.4f;
+        playerPZ.minY = -0.55f;
+        playerPZ.maxY = -0.10f;
+
+        // キャラクター向き（CharacterFacing）：Brawler-Girl は右向きデフォルト
+        // target は敵生成後に Awake() で設定
+        CharacterFacing playerFacing = GetOrAddComponent<CharacterFacing>(player);
+        playerFacing.defaultFacingLeft = false;
 
         // プレイヤーはフェイント後に隙なし（フェイントは攻撃のための布石として使える）
         // 敵は SetupActionDurations で設定した 0.3f のまま維持
@@ -118,9 +127,9 @@ public class SampleSceneSetup2D : MonoBehaviour
         ai.moveSpeed = 1.5f;
         ai.useFeint = false;
 
-        // 疑似3D の Y移動範囲を設定
-        ai.minY = -0.7f;
-        ai.maxY =  0.4f;
+        // 疑似3D の Y移動範囲を設定（画面下側・狭い範囲）
+        ai.minY = -0.55f;
+        ai.maxY = -0.10f;
 
         ai.SetEnemyType(type);
         CharacterSpriteAnimator2D enemyAnim = GetOrAddComponent<CharacterSpriteAnimator2D>(enemy);
@@ -128,12 +137,14 @@ public class SampleSceneSetup2D : MonoBehaviour
 
         // 疑似3D
         PseudoZ enemyPZ = GetOrAddComponent<PseudoZ>(enemy);
-        enemyPZ.minY = -0.7f;
-        enemyPZ.maxY =  0.4f;
-        // Enemy-Punk は元から左向きなのでフリップ不要
-        // （Brawler-Girl に戻す場合は flipX = true に変更）
-        SpriteRenderer enemySr = enemy.GetComponent<SpriteRenderer>();
-        if (enemySr != null) enemySr.flipX = false;
+        enemyPZ.minY = -0.55f;
+        enemyPZ.maxY = -0.10f;
+
+        // キャラクター向き（CharacterFacing）：Enemy-Punk は左向きデフォルト
+        CharacterFacing enemyFacing = GetOrAddComponent<CharacterFacing>(enemy);
+        enemyFacing.defaultFacingLeft = true;
+        enemyFacing.target = playerState.transform;
+
         return enemyStateMachine;
     }
 
@@ -282,8 +293,8 @@ public class SampleSceneSetup2D : MonoBehaviour
         roundManager.enemyState = enemyState;
         roundManager.playerGuardGauge = playerGuard;
         roundManager.enemyGuardGauge = enemyGuard;
-        roundManager.playerStartPosition = new Vector3(-0.5f, 0f, 0f);
-        roundManager.enemyStartPosition = new Vector3(0.5f, 0f, 0f);
+        roundManager.playerStartPosition = new Vector3(-0.5f, -0.3f, 0f);
+        roundManager.enemyStartPosition  = new Vector3( 0.5f, -0.3f, 0f);
         roundManager.battleController = GetComponent<ProximityJankenBattle2D>();
         roundManager.scoreText = CreateTextUI(canvas.transform, "ScoreText", new Vector2(0f, -20f), new Vector2(320f, 32f), TextAnchor.UpperCenter, 24);
         roundManager.resultText = CreateTextUI(canvas.transform, "ResultText", new Vector2(0f, 0f), new Vector2(400f, 60f), TextAnchor.MiddleCenter, 36);

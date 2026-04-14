@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -6,40 +7,56 @@ using UnityEngine;
 ///
 /// 構造:
 ///   activeEnemy   : プレイヤーと直接戦う敵（1体）
-///   standbyEnemies: 距離を保って待機し、時々邪魔しに来る敵
-///
-/// アクティブ敵が倒れると次のスタンバイ敵がアクティブになる。
+///   standbyEnemies: プレイヤーを囲んでじりじり前後に動きながら待機。
+///                   時々邪魔しに来て、すぐ戻る。
 /// </summary>
 public class MultiEnemyManager : MonoBehaviour
 {
+    [Header("Interference（邪魔）")]
     [Tooltip("邪魔をしに来る確率（毎秒の判定）")]
     [Range(0f, 1f)]
-    public float interferenceChancePerSecond = 0.15f;
+    public float interferenceChancePerSecond = 0.12f;
 
-    [Tooltip("邪魔が終わったら元の待機位置に戻るまでの秒数")]
+    [Tooltip("邪魔をしに来てから戻るまでの秒数")]
     public float returnToStandbyDelay = 2.5f;
 
-    [Tooltip("待機敵のX方向オフセット（プレイヤーの後ろ側に配置）")]
-    public float standbyXOffset = 2.5f;
+    [Header("Standby Position（待機位置）")]
+    [Tooltip("プレイヤーから見てスタンバイ敵を配置するX距離")]
+    public float standbyDistance = 1.8f;
 
-    [Tooltip("待機敵のY位置（プレイヤーとずらす）")]
-    public float standbyYOffset = 0.35f;
+    [Tooltip("スタンバイ敵のY方向オフセット（手前側）")]
+    public float standbyYBase = -0.30f;
+
+    [Header("Standby Movement（じりじり動き）")]
+    [Tooltip("前後に動く幅（歩数感覚）")]
+    public float prowlRange = 0.35f;
+
+    [Tooltip("前後ひとステップの所要秒数")]
+    public float prowlStepDuration = 1.4f;
+
+    [Tooltip("ステップ間のランダム待機幅（秒）")]
+    public float prowlPauseJitter = 0.8f;
 
     // -------------------------------------------------------------------------
 
-    private ICombatStateActor                  playerActor;
-    private Transform                          playerTransform;
-    private List<EnemyRandomCombatAI2D>        allEnemyAIs   = new List<EnemyRandomCombatAI2D>();
-    private List<CombatStateMachine2D>         allEnemySMs   = new List<CombatStateMachine2D>();
-    private int                                activeIndex   = 0;
-    private ProximityJankenBattle2D            battle;
+    private ICombatStateActor           playerActor;
+    private Transform                   playerTransform;
+    private List<EnemyRandomCombatAI2D> allEnemyAIs = new List<EnemyRandomCombatAI2D>();
+    private List<CombatStateMachine2D>  allEnemySMs = new List<CombatStateMachine2D>();
+    private int                         activeIndex = 0;
+    private ProximityJankenBattle2D     battle;
 
     private float interferenceTimer;
+
+    // スタンバイ各体のじりじりオフセット（X方向）
+    private float[] prowlOffsets;
+    private float[] prowlDirections;
+    private float[] prowlTimers;
 
     // -------------------------------------------------------------------------
 
     public void Setup(
-        ICombatStateActor          player,
+        ICombatStateActor           player,
         List<EnemyRandomCombatAI2D> enemyAIs,
         ProximityJankenBattle2D     battleController)
     {
@@ -51,7 +68,17 @@ public class MultiEnemyManager : MonoBehaviour
         foreach (var ai in allEnemyAIs)
             allEnemySMs.Add(ai.GetComponent<CombatStateMachine2D>());
 
-        // 最初のアクティブ敵を設定
+        // じりじり動き用配列を初期化
+        prowlOffsets    = new float[enemyAIs.Count];
+        prowlDirections = new float[enemyAIs.Count];
+        prowlTimers     = new float[enemyAIs.Count];
+        for (int i = 0; i < enemyAIs.Count; i++)
+        {
+            prowlOffsets[i]    = 0f;
+            prowlDirections[i] = Random.value > 0.5f ? 1f : -1f;
+            prowlTimers[i]     = Random.Range(0f, prowlStepDuration); // バラつき初期化
+        }
+
         ActivateEnemy(0);
     }
 
@@ -60,22 +87,20 @@ public class MultiEnemyManager : MonoBehaviour
         if (playerActor == null) return;
 
         // アクティブ敵が死んだら次を起動
-        if (activeIndex < allEnemySMs.Count)
-        {
-            if (allEnemySMs[activeIndex].CurrentStateType == CombatStateType.Dead)
-                PromoteNextEnemy();
-        }
+        if (activeIndex < allEnemySMs.Count &&
+            allEnemySMs[activeIndex].CurrentStateType == CombatStateType.Dead)
+            PromoteNextEnemy();
 
-        // スタンバイ敵の邪魔タイミング判定
+        // 邪魔タイミング判定（1秒ごと）
         interferenceTimer -= Time.deltaTime;
         if (interferenceTimer <= 0f)
         {
-            interferenceTimer = 1f; // 1秒ごとに判定
+            interferenceTimer = 1f;
             TryInterference();
         }
 
-        // スタンバイ敵を待機位置に誘導
-        UpdateStandbyPositions();
+        // スタンバイ敵の更新
+        UpdateStandbyEnemies();
     }
 
     // -------------------------------------------------------------------------
@@ -83,73 +108,73 @@ public class MultiEnemyManager : MonoBehaviour
     private void ActivateEnemy(int index)
     {
         if (index >= allEnemyAIs.Count) return;
-
         activeIndex = index;
-
-        // バトルコントローラーにアクティブ敵を通知
-        var activeSM = allEnemySMs[index];
-        battle.SetActors(playerActor, activeSM);
+        battle.SetActors(playerActor, allEnemySMs[index]);
         allEnemyAIs[index].SetStandbyMode(false);
-
         Debug.Log($"[MultiEnemyManager] Enemy {index} is now active.", this);
     }
 
     private void PromoteNextEnemy()
     {
         int next = activeIndex + 1;
-        if (next >= allEnemyAIs.Count)
-        {
-            Debug.Log("[MultiEnemyManager] All enemies defeated.", this);
-            return;
-        }
+        if (next >= allEnemyAIs.Count) { Debug.Log("[MultiEnemyManager] All enemies defeated.", this); return; }
         ActivateEnemy(next);
     }
 
-    /// <summary>スタンバイ敵がランダムに邪魔をしに来る。</summary>
     private void TryInterference()
     {
         for (int i = 0; i < allEnemyAIs.Count; i++)
         {
             if (i == activeIndex) continue;
-            var sm = allEnemySMs[i];
-            if (sm.CurrentStateType == CombatStateType.Dead) continue;
+            if (allEnemySMs[i].CurrentStateType == CombatStateType.Dead) continue;
             if (!allEnemyAIs[i].IsStandby) continue;
+            if (Random.value >= interferenceChancePerSecond) continue;
 
-            if (Random.value < interferenceChancePerSecond)
-            {
-                Debug.Log($"[MultiEnemyManager] Enemy {i} interfering!", this);
-                allEnemyAIs[i].SetStandbyMode(false);
-
-                // 一定時間後にスタンバイに戻す
-                StartCoroutine(ReturnToStandby(i, returnToStandbyDelay));
-            }
+            Debug.Log($"[MultiEnemyManager] Enemy {i} interfering!", this);
+            allEnemyAIs[i].SetStandbyMode(false);
+            StartCoroutine(ReturnToStandby(i, returnToStandbyDelay));
         }
     }
 
-    /// <summary>スタンバイ敵をプレイヤーの後方・ずれた位置に誘導する。</summary>
-    private void UpdateStandbyPositions()
+    private void UpdateStandbyEnemies()
     {
         if (playerTransform == null) return;
 
-        int standbySlot = 0;
+        int slot = 0;
         for (int i = 0; i < allEnemyAIs.Count; i++)
         {
             if (i == activeIndex) continue;
             if (allEnemySMs[i].CurrentStateType == CombatStateType.Dead) continue;
             if (!allEnemyAIs[i].IsStandby) continue;
 
-            // プレイヤーから見て後方に待機位置を設定
-            float targetX = playerTransform.position.x
-                + (standbySlot % 2 == 0 ? -standbyXOffset : standbyXOffset);
-            float targetY = playerTransform.position.y
-                + standbyYOffset * (standbySlot + 1);
+            // じりじり動きのオフセットを更新
+            prowlTimers[i] -= Time.deltaTime;
+            if (prowlTimers[i] <= 0f)
+            {
+                prowlOffsets[i] += prowlDirections[i] * prowlRange;
+                prowlOffsets[i]  = Mathf.Clamp(prowlOffsets[i], -prowlRange, prowlRange);
+
+                // 端に達したら方向転換
+                if (Mathf.Abs(prowlOffsets[i]) >= prowlRange)
+                    prowlDirections[i] *= -1f;
+
+                // ランダムに方向転換することも
+                if (Random.value < 0.3f) prowlDirections[i] *= -1f;
+
+                prowlTimers[i] = prowlStepDuration + Random.Range(0f, prowlPauseJitter);
+            }
+
+            // 待機位置：プレイヤーの左右（交互）に配置 + じりじりオフセット
+            float side    = (slot % 2 == 0) ? -1f : 1f;
+            float targetX = playerTransform.position.x + side * standbyDistance + prowlOffsets[i];
+            float targetY = standbyYBase - slot * 0.1f; // 少しずつ手前に
 
             allEnemyAIs[i].SetStandbyTarget(new Vector3(targetX, targetY, 0f));
-            standbySlot++;
+            slot++;
         }
     }
 
-    private System.Collections.IEnumerator ReturnToStandby(int index, float delay)
+    private IEnumerator ReturnToStandby(int index, float delay)
     {
         yield return new WaitForSeconds(delay);
         if (index != activeIndex && allEnemySMs[index].CurrentStateType != CombatStateType.Dead)
