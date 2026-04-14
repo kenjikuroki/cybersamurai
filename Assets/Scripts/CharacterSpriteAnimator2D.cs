@@ -9,9 +9,13 @@ using UnityEngine;
 ///   Idle（移動中）                    → Walk（ループ）
 ///   Attack                           → Jab → なければ Punch（1回再生）
 ///   Feint                            → Punch → なければ Idle（1回再生）
-///   Parry                            → Jump_kick → なければ Idle（1回再生）
-///   Vulnerable / GuardBreak / Dead   → Hurt（ループ）
+///   Parry（入力中）                   → Jump_kick → なければ Idle（1回再生）
+///   Vulnerable / GuardBreak / Dead   → Hurt（1回再生して最終フレームで停止）
 ///   ガードヒット時（一時）            → Kick 先頭2枚 → なければ Hurt 先頭2枚
+///   パリィ成功時（一時）              → Jump_kick → なければ Idle（1回再生）
+///
+/// イベント購読:
+///   OnComboAttackStarted  → 攻撃アニメーションを先頭から再スタート
 /// </summary>
 [RequireComponent(typeof(SpriteRenderer))]
 [RequireComponent(typeof(CombatStateMachine2D))]
@@ -26,15 +30,22 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
     [Tooltip("ガードリアクションの表示時間（秒）")]
     public float guardReactionSeconds = 0.4f;
 
+    [Tooltip("パリィ成功時のアニメーション表示時間（秒）")]
+    public float parrySuccessSeconds = 0.35f;
+
     private SpriteRenderer       spriteRenderer;
     private CombatStateMachine2D stateMachine;
 
     private Sprite[] idleSprites;
     private Sprite[] walkSprites;
+    private Sprite[] guardSprites;           // Guard 状態の構えポーズ
     private Sprite[] attackSprites;
     private Sprite[] feintSprites;
-    private Sprite[] parrySprites;
-    private Sprite[] hurtSprites;
+    private Sprite[] parrySprites;           // パリィ入力中（Dive_kick）
+    private Sprite[] parrySuccessSprites;    // パリィ成功フラッシュ（Jump）
+    private Sprite[] parryVulnerableSprites; // パリィされて隙が出たモーション（Jump_kick）
+    private Sprite[] vulnerableSprites;     // ひるみ（Kick 全5枚）
+    private Sprite[] hurtSprites;           // 死亡（Hurt）
     private Sprite[] guardReactionSprites;
 
     private Sprite[] currentSprites;
@@ -45,6 +56,9 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
 
     private CombatStateType lastState = (CombatStateType)(-1);
     private float guardReactionTimer;
+    private float parrySuccessTimer;
+    private float parryVulnerableTimer;
+    private bool  nextVulnerableIsParry; // 次の Vulnerable がパリィ由来かどうか
 
     // -----------------------------------------------------------------------
 
@@ -58,27 +72,51 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
     {
         idleSprites  = Load("Idle");
         walkSprites  = Load("Walk");
-        hurtSprites  = Load("Hurt");
+        hurtSprites       = Load("Hurt");                                           // 死亡：全枚数
+        vulnerableSprites = FirstNonEmpty(Load("Kick"),      Load("Hurt", maxFrames: 2)); // 通常ひるみ：先頭2枚
+
+        // Guard フォルダがあればガードポーズ、なければ Idle で代用
+        guardSprites = FirstNonEmpty(Load("Guard"), Load("Block"), idleSprites);
 
         // アニメーションがない場合は代替フォルダにフォールバック
-        attackSprites        = FirstNonEmpty(Load("Jab"),       Load("Punch"));
-        feintSprites         = FirstNonEmpty(Load("Punch"),     Load("Idle"));
-        parrySprites         = FirstNonEmpty(Load("Jump_kick"), Load("Idle"));
+        attackSprites        = FirstNonEmpty(Load("Jab"),        Load("Punch"));
+        feintSprites         = FirstNonEmpty(Load("Punch"),      Load("Idle"));
+        parrySprites         = FirstNonEmpty(Load("Dive_kick"),  Load("Jump_kick"), Load("Idle"));
+        parrySuccessSprites  = FirstNonEmpty(Load("Jump"),       Load("Jump_kick"), Load("Idle"));
+        parryVulnerableSprites = FirstNonEmpty(Load("Jump_kick"), Load("Kick"), Load("Hurt", maxFrames: 1)); // パリィされた隙：先頭1枚で静止
         guardReactionSprites = FirstNonEmpty(Load("Kick",  maxFrames: 2),
                                              Load("Hurt",  maxFrames: 2));
+
+        if (stateMachine != null)
+        {
+            // ステート変更を即座に受け取る（1フレーム遅れ解消）
+            stateMachine.OnStateChanged       += HandleStateChanged;
+            // コンボ2撃目以降は同ステートのままタイマーリセットされるため別イベントで対応
+            stateMachine.OnComboAttackStarted += HandleComboAttackStarted;
+        }
 
         PlayAnimation(idleSprites, loop: true);
     }
 
+    private void OnDestroy()
+    {
+        if (stateMachine != null)
+        {
+            stateMachine.OnStateChanged       -= HandleStateChanged;
+            stateMachine.OnComboAttackStarted -= HandleComboAttackStarted;
+        }
+    }
+
     private void Update()
     {
-        if (guardReactionTimer > 0f)
+        // パリィ成功アニメーション中
+        if (parrySuccessTimer > 0f)
         {
-            guardReactionTimer -= Time.deltaTime;
-            if (guardReactionTimer <= 0f)
+            parrySuccessTimer -= Time.deltaTime;
+            if (parrySuccessTimer <= 0f)
             {
-                guardReactionTimer = 0f;
-                lastState = (CombatStateType)(-1);
+                parrySuccessTimer = 0f;
+                HandleStateChanged(stateMachine.CurrentStateType);
             }
             else
             {
@@ -87,55 +125,116 @@ public class CharacterSpriteAnimator2D : MonoBehaviour
             }
         }
 
-        UpdateState();
+        // ガードリアクション中
+        if (guardReactionTimer > 0f)
+        {
+            guardReactionTimer -= Time.deltaTime;
+            if (guardReactionTimer <= 0f)
+            {
+                guardReactionTimer = 0f;
+                HandleStateChanged(stateMachine.CurrentStateType);
+            }
+            else
+            {
+                AdvanceFrame();
+                return;
+            }
+        }
+
         AdvanceFrame();
     }
 
     // -----------------------------------------------------------------------
 
+    /// <summary>パリィ成功時に外部から呼ぶ。parrySuccessSprites（Jump）を一時的に再生する。</summary>
+    public void TriggerParrySuccess()
+    {
+        Sprite[] sprites = (parrySuccessSprites != null && parrySuccessSprites.Length > 0)
+            ? parrySuccessSprites : parrySprites;
+        if (sprites == null || sprites.Length == 0) return;
+        parrySuccessTimer  = parrySuccessSeconds;
+        guardReactionTimer = 0f;
+        PlayAnimation(sprites, duration: parrySuccessSeconds, loop: false);
+    }
+
+    /// <summary>
+    /// パリィされた側（攻撃側）に呼ぶ。
+    /// 次の HandleStateChanged(Vulnerable) で parryVulnerableSprites を使うようフラグを立てる。
+    /// </summary>
+    public void TriggerParryVulnerable()
+    {
+        nextVulnerableIsParry = true;
+    }
+
     public void TriggerGuardReaction()
     {
         if (guardReactionSprites == null || guardReactionSprites.Length == 0) return;
         guardReactionTimer = guardReactionSeconds;
+        parrySuccessTimer  = 0f; // パリィ成功と排他
         PlayAnimation(guardReactionSprites, duration: guardReactionSeconds, loop: true);
     }
 
     // -----------------------------------------------------------------------
+    // イベントハンドラー
+    // -----------------------------------------------------------------------
 
-    private void UpdateState()
+    /// <summary>
+    /// CombatStateMachine2D のステート変更時に即座に呼ばれる（イベント駆動）。
+    /// Update() のポーリングと違い、変更と同フレームでアニメーションが切り替わる。
+    /// </summary>
+    private void HandleStateChanged(CombatStateType newState)
     {
-        CombatStateType current = stateMachine.CurrentStateType;
-        if (current == lastState) return;
-        lastState = current;
+        // 一時アニメーション中は上書きしない
+        if (parrySuccessTimer > 0f || guardReactionTimer > 0f) return;
 
-        switch (current)
+        lastState = newState;
+
+        switch (newState)
         {
             case CombatStateType.Attack:
                 PlayAnimation(attackSprites, loop: false);
                 break;
-
             case CombatStateType.Feint:
                 PlayAnimation(feintSprites, loop: false);
                 break;
-
             case CombatStateType.Parry:
                 PlayAnimation(parrySprites, loop: false);
                 break;
-
+            case CombatStateType.Guard:
+                PlayAnimation(guardSprites, loop: true);
+                break;
             case CombatStateType.Idle:
                 PlayAnimation(walkSprites, loop: true);
                 break;
-
             case CombatStateType.Vulnerable:
-            case CombatStateType.GuardBreak:
-            case CombatStateType.Dead:
-                PlayAnimation(hurtSprites, loop: false);  // 1回再生して最終フレームで停止
+                if (nextVulnerableIsParry)
+                {
+                    nextVulnerableIsParry = false;
+                    // パリィされた隙：Jump_kick（よろけ）
+                    PlayAnimation(parryVulnerableSprites, loop: false);
+                }
+                else
+                {
+                    // 通常やられ：Kick（ひるみ）
+                    PlayAnimation(vulnerableSprites, loop: false);
+                }
                 break;
-
+            case CombatStateType.GuardBreak:
+                PlayAnimation(vulnerableSprites, loop: false);
+                break;
+            case CombatStateType.Dead:
+                PlayAnimation(hurtSprites, loop: false);       // Hurt（死亡）
+                break;
             default:
                 PlayAnimation(idleSprites, loop: true);
                 break;
         }
+    }
+
+    /// <summary>コンボ2撃目・3撃目が始まるとき発火。攻撃アニメを先頭からリスタート。</summary>
+    private void HandleComboAttackStarted()
+    {
+        PlayAnimation(attackSprites, loop: false);
     }
 
     // -----------------------------------------------------------------------

@@ -5,52 +5,68 @@ public abstract class CombatStateMachine2D : MonoBehaviour, ICombatStateActor
 {
     public float idleDuration = -1f;
     public float guardDuration = -1f;
-    public float attackDuration = 1.0f;   // 攻撃：1秒ロック
-    public float parryDuration = 0.8f;    // パリィ：0.8秒ロック
-    public float feintDuration = 0.3f;    // フェイント：0.3秒ロック
+    public float attackDuration = 1.0f;   // 1回の攻撃ロック時間
+    public float parryDuration = 0.4f;
+    [Tooltip("パリィが空振りしたとき（攻撃が来なかった）に発生する隙の秒数。0 = 即フリー")]
+    public float parryWhiffVulnerableDuration = 0.25f;
+    [Tooltip("フェイントが空振りしたとき（誰も反応しなかった）に発生する隙の秒数。0 = 即フリー")]
+    public float feintWhiffVulnerableDuration = 0.30f;
+    public float feintDuration = 0.3f;
     public float vulnerableDuration = 0.5f;
     public float guardBreakDuration = 0.5f;
     public float deadDuration = -1f;
 
     [Header("Judgment Timing")]
-    public float attackJudgmentTime = 0.25f;  // Attack 開始から判定が発生するまでの秒数（Jab 3フレーム×8fps のヒット瞬間に合わせる）
-    public float parryJudgmentTime  = 0.3f;   // Parry  開始から判定が発生するまでの秒数
+    public float attackJudgmentTime = 0.25f;
+    public float parryJudgmentTime  = 0.3f;
 
-    /// <summary>
-    /// 判定タイミングで発火するイベント。
-    /// ProximityJankenBattle2D がこれを購読して解決処理を行う。
-    /// </summary>
+    [Header("Combo")]
+    [Tooltip("連続攻撃の最大回数")]
+    public int maxComboCount = 3;
+
+    // ── パブリックイベント ──────────────────────────────────────────────────
+
+    /// <summary>Attack / Parry の判定タイミングで発火。</summary>
     public System.Action OnJudgmentFired;
 
-    /// <summary>
-    /// Attack 判定が発火済みかどうか（ステート終了まで true を保持）。
-    /// パリィ遅延チェックに使用する。
-    /// </summary>
-    public bool IsAttackJudgmentFired { get; private set; }
+    /// <summary>コンボの2撃目・3撃目が始まるときに発火（アニメーション再生に使う）。</summary>
+    public System.Action OnComboAttackStarted;
+
+    /// <summary>ステートが変わった瞬間に発火。アニメーターはこれを購読して即座に切り替える。</summary>
+    public System.Action<CombatStateType> OnStateChanged;
+
+    // ── プロパティ ──────────────────────────────────────────────────────────
 
     public CombatStateType CurrentStateType => currentState?.StateType ?? CombatStateType.Guard;
     public float LastActionTimestamp { get; private set; }
+    public int   CurrentComboCount   { get; private set; }
 
-    public bool IsMovementLocked => CurrentStateType == CombatStateType.Vulnerable
+    public bool IsAttackJudgmentFired { get; private set; }
+
+    public bool IsMovementLocked => CurrentStateType == CombatStateType.Attack
+        || CurrentStateType == CombatStateType.Parry
+        || CurrentStateType == CombatStateType.Feint
+        || CurrentStateType == CombatStateType.Vulnerable
         || CurrentStateType == CombatStateType.GuardBreak
         || CurrentStateType == CombatStateType.Dead;
 
-    /// <summary>
-    /// Attack / Parry / Feint のモーション中は true。
-    /// この間は新しいアクション入力を無視する（バッファなし）。
-    /// </summary>
     public bool IsActionLocked => CurrentStateType == CombatStateType.Attack
         || CurrentStateType == CombatStateType.Parry
         || CurrentStateType == CombatStateType.Feint;
 
     protected bool HasPrimaryInput { get; private set; }
 
-    private readonly Dictionary<CombatStateType, CombatState> states = new Dictionary<CombatStateType, CombatState>();
+    // ── 内部フィールド ──────────────────────────────────────────────────────
+
+    private readonly Dictionary<CombatStateType, CombatState> states
+        = new Dictionary<CombatStateType, CombatState>();
     private CombatState currentState;
     private float guardUnavailableUntil;
 
-    // VulnerableState に渡す一時的な持続時間オーバーライド（-1 = 使用しない）
     internal float vulnerableDurationOverride = -1f;
+    internal bool  attackBuffered;          // Attack 中に次の攻撃が入力された
+
+    // =========================================================================
 
     protected virtual void Awake()
     {
@@ -83,10 +99,7 @@ public abstract class CombatStateMachine2D : MonoBehaviour, ICombatStateActor
             return;
         }
 
-        if (currentState == nextState)
-        {
-            return;
-        }
+        if (currentState == nextState) return;
 
         CombatStateType previousStateType = currentState?.StateType ?? CombatStateType.Guard;
         currentState?.Exit();
@@ -94,89 +107,90 @@ public abstract class CombatStateMachine2D : MonoBehaviour, ICombatStateActor
         currentState.Enter();
 
         Debug.Log($"{name} State: {previousStateType} -> {currentState.StateType}", this);
+        OnStateChanged?.Invoke(currentState.StateType);
         if (currentState.StateType == CombatStateType.Dead)
-        {
             Debug.Log($"{name} Dead", this);
-        }
     }
 
-    /// <summary>
-    /// アクションロックを即座に解除してニュートラル（Guard / Idle）に戻す。
-    /// パリィ成功時に攻撃側のロックを強制解除するために使用。
-    /// </summary>
     public void CancelToNeutral()
     {
         ChangeState(GetNeutralState());
     }
 
+    // =========================================================================
+    // アクショントリガー
+    // =========================================================================
+
     public virtual void TriggerAttack()
     {
-        if (IsActionLocked || IsMovementLocked)
+        if (IsMovementLocked) return;
+
+        // ── Attack 中 → コンボバッファ ──
+        if (CurrentStateType == CombatStateType.Attack)
         {
+            if (CurrentComboCount < maxComboCount)
+                attackBuffered = true;
             return;
         }
 
+        // Parry / Feint 中は不可
+        if (IsActionLocked) return;
+
+        CurrentComboCount = 1;
+        attackBuffered    = false;
         LastActionTimestamp = Time.time;
         ChangeState(CombatStateType.Attack);
     }
 
     public virtual void TriggerParry()
     {
-        if (IsActionLocked || IsMovementLocked)
-        {
-            return;
-        }
-
+        if (IsActionLocked || IsMovementLocked) return;
         LastActionTimestamp = Time.time;
         ChangeState(CombatStateType.Parry);
     }
 
     public virtual void TriggerFeint()
     {
-        if (IsActionLocked || IsMovementLocked)
-        {
-            return;
-        }
-
+        if (IsActionLocked || IsMovementLocked) return;
         LastActionTimestamp = Time.time;
         ChangeState(CombatStateType.Feint);
     }
 
     public virtual void TriggerVulnerable()
     {
-        if (CurrentStateType == CombatStateType.Dead)
-        {
-            return;
-        }
-
+        if (CurrentStateType == CombatStateType.Dead) return;
+        ResetCombo();
         vulnerableDurationOverride = -1f;
         ChangeState(CombatStateType.Vulnerable);
     }
 
-    /// <summary>
-    /// 指定した持続時間で Vulnerable 状態に入る。
-    /// パリィ成功時に防御側へ短い硬直を与えるために使用。
-    /// </summary>
     public void TriggerVulnerableWithDuration(float duration)
     {
-        if (CurrentStateType == CombatStateType.Dead)
-        {
-            return;
-        }
-
+        if (CurrentStateType == CombatStateType.Dead) return;
+        ResetCombo();
         vulnerableDurationOverride = duration;
         ChangeState(CombatStateType.Vulnerable);
     }
 
     public virtual void TriggerGuardBreak(float guardLockDuration)
     {
-        if (CurrentStateType == CombatStateType.Dead)
-        {
-            return;
-        }
-
+        if (CurrentStateType == CombatStateType.Dead) return;
+        ResetCombo();
         guardUnavailableUntil = Mathf.Max(guardUnavailableUntil, Time.time + guardLockDuration);
         ChangeState(CombatStateType.GuardBreak);
+    }
+
+    /// <summary>
+    /// ガードブレイク時にパリィ成功と同じ Vulnerable 状態に入る。
+    /// ガード不可タイマーは維持しつつ、見た目・挙動を Vulnerable と統一する。
+    /// </summary>
+    public void TriggerGuardBreakAsVulnerable(float lockDuration, float vulnerableDuration)
+    {
+        if (CurrentStateType == CombatStateType.Dead) return;
+        ResetCombo();
+        guardUnavailableUntil      = Mathf.Max(guardUnavailableUntil, Time.time + lockDuration);
+        vulnerableDurationOverride = vulnerableDuration;
+        ChangeState(CombatStateType.Vulnerable);
     }
 
     public virtual void TriggerDead()
@@ -186,12 +200,21 @@ public abstract class CombatStateMachine2D : MonoBehaviour, ICombatStateActor
 
     public void ResetForRound()
     {
-        guardUnavailableUntil = 0f;
-        LastActionTimestamp = 0f;
-        IsAttackJudgmentFired = false;
+        guardUnavailableUntil     = 0f;
+        LastActionTimestamp       = 0f;
+        IsAttackJudgmentFired     = false;
         vulnerableDurationOverride = -1f;
+        ResetCombo();
+        // Rigidbody2D を Dynamic に戻す
+        Rigidbody2D rb = GetComponent<Rigidbody2D>();
+        if (rb != null) rb.bodyType = RigidbodyType2D.Dynamic;
+        // コライダーをトリガーから通常に戻す
+        Collider2D col = GetComponent<Collider2D>();
+        if (col != null) col.isTrigger = false;
         ChangeState(CombatStateType.Guard);
     }
+
+    // =========================================================================
 
     public float GetDuration(CombatStateType stateType)
     {
@@ -209,20 +232,16 @@ public abstract class CombatStateMachine2D : MonoBehaviour, ICombatStateActor
         }
     }
 
-    protected bool CanEnterGuard()
+    private void ResetCombo()
     {
-        return Time.time >= guardUnavailableUntil;
+        CurrentComboCount = 0;
+        attackBuffered    = false;
     }
 
-    protected CombatStateType GetNeutralState()
-    {
-        return CanEnterGuard() ? CombatStateType.Guard : CombatStateType.Idle;
-    }
+    protected bool CanEnterGuard()     => Time.time >= guardUnavailableUntil;
+    protected CombatStateType GetNeutralState() => CanEnterGuard() ? CombatStateType.Guard : CombatStateType.Idle;
 
-    protected virtual bool QueryPrimaryInput()
-    {
-        return false;
-    }
+    protected virtual bool QueryPrimaryInput() => false;
 
     // =========================================================================
     // 内部ステートクラス
@@ -235,87 +254,55 @@ public abstract class CombatStateMachine2D : MonoBehaviour, ICombatStateActor
 
         public abstract CombatStateType StateType { get; }
 
-        protected CombatState(CombatStateMachine2D stateMachine)
-        {
-            this.stateMachine = stateMachine;
-        }
+        protected CombatState(CombatStateMachine2D sm) { stateMachine = sm; }
 
-        public virtual void Enter()
-        {
-            elapsedTime = 0f;
-        }
-
-        public virtual void Tick()
-        {
-            elapsedTime += Time.deltaTime;
-        }
-
-        public virtual void Exit()
-        {
-        }
+        public virtual void Enter()  { elapsedTime = 0f; }
+        public virtual void Tick()   { elapsedTime += Time.deltaTime; }
+        public virtual void Exit()   { }
 
         protected bool HasDurationElapsed()
         {
-            float duration = stateMachine.GetDuration(StateType);
-            return duration >= 0f && elapsedTime >= duration;
+            float d = stateMachine.GetDuration(StateType);
+            return d >= 0f && elapsedTime >= d;
         }
     }
 
     private sealed class IdleState : CombatState
     {
         public override CombatStateType StateType => CombatStateType.Idle;
-
-        public IdleState(CombatStateMachine2D stateMachine) : base(stateMachine) { }
+        public IdleState(CombatStateMachine2D sm) : base(sm) { }
 
         public override void Tick()
         {
             base.Tick();
-
-            if (!stateMachine.HasPrimaryInput)
-            {
+            if (!stateMachine.HasPrimaryInput || HasDurationElapsed())
                 stateMachine.ChangeState(stateMachine.GetNeutralState());
-                return;
-            }
-
-            if (HasDurationElapsed())
-            {
-                stateMachine.ChangeState(stateMachine.GetNeutralState());
-            }
         }
     }
 
     private sealed class GuardState : CombatState
     {
         public override CombatStateType StateType => CombatStateType.Guard;
-
-        public GuardState(CombatStateMachine2D stateMachine) : base(stateMachine) { }
+        public GuardState(CombatStateMachine2D sm) : base(sm) { }
 
         public override void Tick()
         {
             base.Tick();
-
-            if (stateMachine.HasPrimaryInput)
-            {
+            if (stateMachine.HasPrimaryInput || HasDurationElapsed())
                 stateMachine.ChangeState(CombatStateType.Idle);
-                return;
-            }
-
-            if (HasDurationElapsed())
-            {
-                stateMachine.ChangeState(CombatStateType.Idle);
-            }
         }
     }
 
     /// <summary>
-    /// Attack：1秒ロック / attackJudgmentTime 秒時点で OnJudgmentFired を1回発火
+    /// Attack：attackDuration 秒ロック、attackJudgmentTime で判定発火。
+    /// バッファがあれば最大 maxComboCount 回まで同ステートを継続する。
     /// </summary>
     private sealed class AttackState : CombatState
     {
         public override CombatStateType StateType => CombatStateType.Attack;
         private bool judgmentFired;
 
-        public AttackState(CombatStateMachine2D stateMachine) : base(stateMachine) { }
+        public AttackState(CombatStateMachine2D sm) : base(sm) { }
 
         public override void Enter()
         {
@@ -328,16 +315,35 @@ public abstract class CombatStateMachine2D : MonoBehaviour, ICombatStateActor
         {
             base.Tick();
 
+            // 判定（1回のみ）
             if (!judgmentFired && elapsedTime >= stateMachine.attackJudgmentTime)
             {
                 judgmentFired = true;
-                stateMachine.IsAttackJudgmentFired = true;
-                stateMachine.OnJudgmentFired?.Invoke();
+                stateMachine.OnJudgmentFired?.Invoke();   // Resolve() を先に呼ぶ
+                stateMachine.IsAttackJudgmentFired = true; // その後に「発火済み」フラグを立てる
             }
 
             if (HasDurationElapsed())
             {
-                stateMachine.ChangeState(stateMachine.GetNeutralState());
+                if (stateMachine.attackBuffered &&
+                    stateMachine.CurrentComboCount < stateMachine.maxComboCount)
+                {
+                    // ── コンボ継続：同ステートのままタイマーをリセット ──
+                    stateMachine.CurrentComboCount++;
+                    stateMachine.attackBuffered        = false;
+                    stateMachine.LastActionTimestamp   = Time.time;
+                    stateMachine.IsAttackJudgmentFired = false;
+                    judgmentFired = false;
+                    elapsedTime   = 0f;
+                    stateMachine.OnComboAttackStarted?.Invoke();
+                }
+                else
+                {
+                    // ── コンボ終了 ──
+                    stateMachine.CurrentComboCount = 0;
+                    stateMachine.attackBuffered    = false;
+                    stateMachine.ChangeState(stateMachine.GetNeutralState());
+                }
             }
         }
 
@@ -348,132 +354,130 @@ public abstract class CombatStateMachine2D : MonoBehaviour, ICombatStateActor
         }
     }
 
-    /// <summary>
-    /// Parry：0.8秒ロック / parryJudgmentTime 秒時点で OnJudgmentFired を1回発火
-    /// （Parry vs Feint などの解決に使用。Attack vs Parry の判定は Attack 側の発火で処理）
-    /// </summary>
     private sealed class ParryState : CombatState
     {
         public override CombatStateType StateType => CombatStateType.Parry;
         private bool judgmentFired;
 
-        public ParryState(CombatStateMachine2D stateMachine) : base(stateMachine) { }
+        public ParryState(CombatStateMachine2D sm) : base(sm) { }
 
-        public override void Enter()
-        {
-            base.Enter();
-            judgmentFired = false;
-        }
+        public override void Enter()  { base.Enter(); judgmentFired = false; }
 
         public override void Tick()
         {
             base.Tick();
-
             if (!judgmentFired && elapsedTime >= stateMachine.parryJudgmentTime)
             {
                 judgmentFired = true;
                 stateMachine.OnJudgmentFired?.Invoke();
             }
-
             if (HasDurationElapsed())
             {
-                stateMachine.ChangeState(stateMachine.GetNeutralState());
+                // まだ Parry 状態のまま = 空振り（攻撃が来なかった / NoEffect）
+                // → 短い隙を発生させて連打を抑制する
+                if (stateMachine.CurrentStateType == CombatStateType.Parry)
+                {
+                    if (stateMachine.parryWhiffVulnerableDuration > 0f)
+                    {
+                        Debug.Log($"{stateMachine.name} Parry whiff → Vulnerable {stateMachine.parryWhiffVulnerableDuration:F2}s", stateMachine);
+                        stateMachine.TriggerVulnerableWithDuration(stateMachine.parryWhiffVulnerableDuration);
+                    }
+                    else
+                    {
+                        stateMachine.ChangeState(stateMachine.GetNeutralState());
+                    }
+                }
+                // else: 判定解決ですでに別の状態に遷移済み → 何もしない
             }
         }
 
-        public override void Exit()
-        {
-            judgmentFired = false;
-        }
+        public override void Exit() { judgmentFired = false; }
     }
 
-    /// <summary>
-    /// Feint：0.3秒ロック / 判定なし
-    /// </summary>
     private sealed class FeintState : CombatState
     {
         public override CombatStateType StateType => CombatStateType.Feint;
-
-        public FeintState(CombatStateMachine2D stateMachine) : base(stateMachine) { }
+        public FeintState(CombatStateMachine2D sm) : base(sm) { }
 
         public override void Tick()
         {
             base.Tick();
-
             if (HasDurationElapsed())
             {
-                stateMachine.ChangeState(stateMachine.GetNeutralState());
+                // フェイント終了後に短い隙を発生させる
+                if (stateMachine.feintWhiffVulnerableDuration > 0f)
+                {
+                    Debug.Log($"{stateMachine.name} Feint → Vulnerable {stateMachine.feintWhiffVulnerableDuration:F2}s", stateMachine);
+                    stateMachine.TriggerVulnerableWithDuration(stateMachine.feintWhiffVulnerableDuration);
+                }
+                else
+                    stateMachine.ChangeState(stateMachine.GetNeutralState());
             }
         }
     }
 
-    /// <summary>
-    /// Vulnerable：vulnerableDurationOverride が設定されている場合はその時間を使用する。
-    /// </summary>
     private sealed class VulnerableState : CombatState
     {
         public override CombatStateType StateType => CombatStateType.Vulnerable;
         private float activeDuration;
 
-        public VulnerableState(CombatStateMachine2D stateMachine) : base(stateMachine) { }
+        public VulnerableState(CombatStateMachine2D sm) : base(sm) { }
 
         public override void Enter()
         {
             base.Enter();
-            // オーバーライドがあればそれを使い、なければデフォルト値を使う
-            if (stateMachine.vulnerableDurationOverride > 0f)
-            {
-                activeDuration = stateMachine.vulnerableDurationOverride;
-                stateMachine.vulnerableDurationOverride = -1f;
-            }
-            else
-            {
-                activeDuration = stateMachine.vulnerableDuration;
-            }
+            activeDuration = stateMachine.vulnerableDurationOverride > 0f
+                ? stateMachine.vulnerableDurationOverride
+                : stateMachine.vulnerableDuration;
+            stateMachine.vulnerableDurationOverride = -1f;
         }
 
         public override void Tick()
         {
             base.Tick();
-
             if (activeDuration >= 0f && elapsedTime >= activeDuration)
-            {
                 stateMachine.ChangeState(stateMachine.GetNeutralState());
-            }
         }
     }
 
     private sealed class GuardBreakState : CombatState
     {
         public override CombatStateType StateType => CombatStateType.GuardBreak;
-
-        public GuardBreakState(CombatStateMachine2D stateMachine) : base(stateMachine) { }
+        public GuardBreakState(CombatStateMachine2D sm) : base(sm) { }
 
         public override void Tick()
         {
             base.Tick();
-
             if (HasDurationElapsed())
-            {
                 stateMachine.ChangeState(stateMachine.GetNeutralState());
-            }
         }
     }
 
     private sealed class DeadState : CombatState
     {
         public override CombatStateType StateType => CombatStateType.Dead;
+        public DeadState(CombatStateMachine2D sm) : base(sm) { }
 
-        public DeadState(CombatStateMachine2D stateMachine) : base(stateMachine) { }
+        public override void Enter()
+        {
+            base.Enter();
+            // Kinematic にして重力・物理を止め、その場に留まらせる
+            Rigidbody2D rb = stateMachine.GetComponent<Rigidbody2D>();
+            if (rb != null)
+            {
+                rb.linearVelocity = Vector2.zero;
+                rb.bodyType = RigidbodyType2D.Kinematic;
+            }
+            // トリガーにして他のキャラが通り抜けられるようにする
+            Collider2D col = stateMachine.GetComponent<Collider2D>();
+            if (col != null) col.isTrigger = true;
+        }
 
         public override void Tick()
         {
             base.Tick();
-
             if (HasDurationElapsed())
-            {
                 Debug.Log("Dead state duration ended, remaining in Dead state.", stateMachine);
-            }
         }
     }
 }
@@ -487,12 +491,5 @@ public interface ICombatStateActor
 
 public enum CombatStateType
 {
-    Idle,
-    Guard,
-    Attack,
-    Parry,
-    Feint,
-    Vulnerable,
-    GuardBreak,
-    Dead
+    Idle, Guard, Attack, Parry, Feint, Vulnerable, GuardBreak, Dead
 }

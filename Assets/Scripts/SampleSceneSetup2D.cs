@@ -7,6 +7,7 @@ public class SampleSceneSetup2D : MonoBehaviour
 
     private void Awake()
     {
+        GetOrAddComponent<HitstopManager>(gameObject);
         SetupMainCamera();
         PlayerStateMachine2D playerState = SetupPlayer();
         EnemyStateMachine2D enemyState = SetupEnemy(playerState);
@@ -25,6 +26,14 @@ public class SampleSceneSetup2D : MonoBehaviour
         BattlePresentation2D presentation = SetupBattlePresentation(canvas);
         GetComponent<ProximityJankenBattle2D>().presentation = presentation;
         SetupRoundManager(playerState, enemyState, playerGuard, enemyGuard, canvas);
+
+        // テスト用敵タイプ切り替えUI
+        EnemyRandomCombatAI2D enemyAIForUI = enemyState.GetComponent<EnemyRandomCombatAI2D>();
+        if (enemyAIForUI != null)
+        {
+            EnemyTypeTestUI testUI = GetOrAddComponent<EnemyTypeTestUI>(gameObject);
+            testUI.Setup(enemyAIForUI);
+        }
     }
 
     private PlayerStateMachine2D SetupPlayer()
@@ -37,10 +46,25 @@ public class SampleSceneSetup2D : MonoBehaviour
         GetOrAddComponent<PlayerMovement2D>(player);
         PlayerStateMachine2D stateMachine = GetOrAddComponent<PlayerStateMachine2D>(player);
         SetupActionDurations(stateMachine);
-        GetOrAddComponent<GuardGauge>(player);
+        GuardGauge playerGuardGaugeSetup = GetOrAddComponent<GuardGauge>(player);
+        playerGuardGaugeSetup.maxGuard                    = 3;    // 2発ガードで残り1
+        playerGuardGaugeSetup.guardBreakVulnerableDuration = 1.2f; // パリィ成功と同じ隙
         CharacterStateVisual2D visual = GetOrAddComponent<CharacterStateVisual2D>(player);
         visual.isPlayer = true;
         GetOrAddComponent<CharacterSpriteAnimator2D>(player);
+
+        // プレイヤーはフェイント後に隙なし（フェイントは攻撃のための布石として使える）
+        // 敵は SetupActionDurations で設定した 0.3f のまま維持
+        stateMachine.feintWhiffVulnerableDuration = 0f;
+
+        // プレイヤー固有スタッツ
+        CharacterStats playerStats = GetOrAddComponent<CharacterStats>(player);
+        playerStats.moveSpeed        = 5f;    // 敵より常に速い
+        playerStats.attackDuration   = 0.65f;
+        playerStats.guardDamageDealt = 1;
+        playerStats.parryWindowSize  = 0.35f;
+        playerStats.ApplyToCombatStateMachine();
+
         return stateMachine;
     }
 
@@ -54,16 +78,22 @@ public class SampleSceneSetup2D : MonoBehaviour
         SetupBoxCollider(enemy, spriteRenderer.sprite.bounds.size, Vector2.zero);
         EnemyStateMachine2D enemyStateMachine = GetOrAddComponent<EnemyStateMachine2D>(enemy);
         SetupActionDurations(enemyStateMachine);
-        GetOrAddComponent<GuardGauge>(enemy);
+        GuardGauge enemyGuardGaugeSetup = GetOrAddComponent<GuardGauge>(enemy);
+        enemyGuardGaugeSetup.maxGuard                    = 3;
+        enemyGuardGaugeSetup.guardBreakVulnerableDuration = 1.2f;
         CharacterStateVisual2D visual = GetOrAddComponent<CharacterStateVisual2D>(enemy);
         visual.isPlayer = false;
         EnemyRandomCombatAI2D ai = GetOrAddComponent<EnemyRandomCombatAI2D>(enemy);
         ai.targetActorSource = playerState;
-        ai.minActionInterval = 2f;
-        ai.maxActionInterval = 4f;
+        ai.minActionInterval = 1.2f;
+        ai.maxActionInterval = 2.5f;
         ai.chargeDuration = 0.5f;
         ai.approachDistance = 0.8f;  // 踏み込み時にこの距離まで詰める
         ai.moveSpeed = 1.5f;
+        ai.useFeint = false;         // パリィ調整中はフェイントを使わない
+
+        // 敵の初期スタッツ（Attacker タイプで開始）
+        ai.SetEnemyType(EnemyType.Attacker);
         CharacterSpriteAnimator2D enemyAnim = GetOrAddComponent<CharacterSpriteAnimator2D>(enemy);
         enemyAnim.characterSkin = "Enemy-Punk";
         // Enemy-Punk は元から左向きなのでフリップ不要
@@ -75,11 +105,14 @@ public class SampleSceneSetup2D : MonoBehaviour
 
     private static void SetupActionDurations(CombatStateMachine2D sm)
     {
-        sm.attackDuration      = 1.0f;  // 攻撃：1秒ロック（判定は0.5秒時点）
-        sm.parryDuration       = 0.4f;  // パリィ：外れ時のリカバリー0.4秒（成功/失敗時は即キャンセル）
-        sm.feintDuration       = 0.3f;  // フェイント：0.3秒ロック（判定なし）
-        sm.vulnerableDuration  = 0.8f;  // ダメージ硬直
-        sm.guardBreakDuration  = 1.2f;  // ガードブレイク硬直
+        sm.attackDuration               = 0.65f; // 攻撃：0.65秒ロック（コンボをテンポよく）
+        sm.attackJudgmentTime           = 0.4f;  // 攻撃判定：0.4秒時点
+        sm.parryDuration                = 0.4f;  // パリィ：受付時間
+        sm.parryWhiffVulnerableDuration = 0.9f;  // パリィ空振り時の隙（反応できる長さ）
+        sm.feintDuration                = 0.3f;  // フェイント：0.3秒ロック
+        sm.feintWhiffVulnerableDuration = 0.3f;  // フェイント後の隙（敵用。プレイヤーは下で0に上書き）
+        sm.vulnerableDuration           = 0.8f;  // ダメージ硬直
+        sm.guardBreakDuration           = 1.2f;  // ガードブレイク硬直
     }
 
     private void SetupGround()
@@ -93,9 +126,17 @@ public class SampleSceneSetup2D : MonoBehaviour
 
     private void SetupBattle(PlayerStateMachine2D playerState, EnemyStateMachine2D enemyState)
     {
-        GetOrAddComponent<JankenCombatResolver2D>(gameObject);
+        JankenCombatResolver2D resolver = GetOrAddComponent<JankenCombatResolver2D>(gameObject);
+        // パリィ受付ウィンドウ（attackJudgmentTime=0.5f に対して 0〜0.45s）
+        resolver.parryWindowStart            = 0.0f;   // 早すぎペナルティなし
+        resolver.parryWindowEnd              = 0.35f;  // 攻撃判定(0.4s)の直前まで受付
+        resolver.attackerVulnerableDuration  = 2.0f;  // パリィ成功後の敵の隙（余裕を持って攻撃できる長さ）
+        resolver.parrierVulnerableDuration   = 0.0f;   // パリィ成功後は即フリー（すぐ攻撃に移れる）
+        resolver.earlyParryVulnerableDuration= 0.0f;   // 早すぎペナルティなし
+
         ProximityJankenBattle2D battle = GetOrAddComponent<ProximityJankenBattle2D>(gameObject);
-        battle.resolveDistance = 1.5f;
+        battle.resolveDistance      = 0.9f;   // approachDistance(0.8f) より少し広めに設定
+        battle.minSeparationDistance = 0.42f; // これより近くなると強制的に押し離す
         battle.playerSource = playerState;
         battle.enemySource = enemyState;
         battle.SetActors(playerState, enemyState);

@@ -1,6 +1,4 @@
 using UnityEngine;
-using UnityEngine.InputSystem;
-using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 public class RoundManager : MonoBehaviour
@@ -22,7 +20,7 @@ public class RoundManager : MonoBehaviour
     private int roundNumber = 1;
     private float roundEndTimer;
     private bool roundEnding;
-    private bool matchEnded;
+
     private void Start()
     {
         UpdateScoreText();
@@ -32,16 +30,7 @@ public class RoundManager : MonoBehaviour
 
     private void Update()
     {
-        if (playerState == null || enemyState == null)
-        {
-            return;
-        }
-
-        if (matchEnded)
-        {
-            HandleReturnToTitleInput();
-            return;
-        }
+        if (playerState == null || enemyState == null) return;
 
         if (!roundEnding)
         {
@@ -51,9 +40,7 @@ public class RoundManager : MonoBehaviour
 
         roundEndTimer += Time.deltaTime;
         if (roundEndTimer >= roundEndDisplayDuration)
-        {
             StartNextRound();
-        }
     }
 
     private void CheckRoundEnd()
@@ -80,11 +67,12 @@ public class RoundManager : MonoBehaviour
         UpdateScoreText();
         Debug.Log(resultMessage, this);
 
+        // 先取ポイント到達したらスコアをリセットして続行（無限戦闘）
         if (playerWins >= roundsToWin || enemyWins >= roundsToWin)
         {
-            matchEnded = true;
-            roundEnding = false;
-            SetResultText(playerWins >= roundsToWin ? "Player Win!" : "Game Over");
+            SetResultText(playerWins >= roundsToWin ? "Player Win! Next Round!" : "Enemy Win! Next Round!");
+            playerWins = 0;
+            enemyWins  = 0;
         }
     }
 
@@ -114,21 +102,6 @@ public class RoundManager : MonoBehaviour
 
         roundNumber++;
         Debug.Log($"Round {roundNumber} Start", this);
-    }
-
-    private void HandleReturnToTitleInput()
-    {
-        Keyboard keyboard = Keyboard.current;
-        if (keyboard == null)
-        {
-            return;
-        }
-
-        if (keyboard.rKey.wasPressedThisFrame)
-        {
-            Debug.Log("GameScene: R pressed -> Load TitleScene", this);
-            SceneManager.LoadScene("TitleScene");
-        }
     }
 
     private static void ResetActor(CombatStateMachine2D stateMachine, Vector3 position)

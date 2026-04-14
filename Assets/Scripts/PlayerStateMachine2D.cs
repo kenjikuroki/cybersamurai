@@ -42,24 +42,21 @@ public class PlayerStateMachine2D : CombatStateMachine2D
 
     private void HandleActionInput()
     {
-        // アクションロック中（Attack/Parry/Feint モーション中）は入力を全て無視する
-        if (IsActionLocked)
-        {
-            return;
-        }
-
         Keyboard keyboard = Keyboard.current;
         if (keyboard == null)
         {
             return;
         }
 
+        // J キー：Attack 中はコンボバッファとして受け付ける必要があるため
+        // IsActionLocked では弾かない。TriggerAttack() 内部でロック判定を行う。
         if (keyboard.jKey.wasPressedThisFrame)
         {
             Debug.Log("Player Input: J -> Attack", this);
             TriggerAttack();
         }
 
+        // K / L は Attack/Parry/Feint 中は無効。TriggerParry/Feint() 内のガードに任せる。
         if (keyboard.kKey.wasPressedThisFrame)
         {
             Debug.Log("Player Input: K -> Parry", this);

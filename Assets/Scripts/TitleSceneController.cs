@@ -18,16 +18,43 @@ public class TitleSceneController : MonoBehaviour
 
     private void Update()
     {
-        Keyboard keyboard = Keyboard.current;
-        if (keyboard == null)
+        bool pressed = false;
+
+        // New Input System (プロジェクト設定が "New Input System Only" の場合)
+        var kb = Keyboard.current;
+        if (kb != null)
+            pressed = kb.spaceKey.wasPressedThisFrame || kb.enterKey.wasPressedThisFrame;
+
+        // Gamepad の任意ボタンでも開始できるよう対応
+        var gp = Gamepad.current;
+        if (gp != null)
+            pressed |= gp.startButton.wasPressedThisFrame || gp.buttonSouth.wasPressedThisFrame;
+
+        if (!pressed) return;
+
+        Debug.Log("TitleScene: Key pressed -> Load GameScene", this);
+
+        // シーンがBuild Settingsにあるか確認してからロード
+        bool found = false;
+        for (int i = 0; i < SceneManager.sceneCountInBuildSettings; i++)
         {
-            return;
+            if (SceneUtility.GetScenePathByBuildIndex(i).Contains(GameSceneName))
+            {
+                found = true;
+                break;
+            }
         }
 
-        if (keyboard.spaceKey.wasPressedThisFrame)
+        if (found)
         {
-            Debug.Log("TitleScene: Space pressed -> Load GameScene", this);
             SceneManager.LoadScene(GameSceneName);
+        }
+        else
+        {
+            Debug.LogError(
+                $"「{GameSceneName}」が Build Settings に登録されていません。\n" +
+                "File > Build Settings > Add Open Scenes で TitleScene と GameScene を両方追加し、" +
+                "TitleScene を index 0、GameScene を index 1 にしてください。", this);
         }
     }
 
@@ -51,7 +78,7 @@ public class TitleSceneController : MonoBehaviour
             (Screen.height - promptHeight) * 0.5f + 10f,
             promptWidth,
             promptHeight);
-        GUI.Label(promptRect, "Press Space to Start", promptStyle);
+        GUI.Label(promptRect, "Press Space / Enter to Start", promptStyle);
     }
 
     private void SetupMainCamera()
@@ -76,7 +103,7 @@ public class TitleSceneController : MonoBehaviour
         GetOrAddComponent<GraphicRaycaster>(canvasObject);
 
         CreateText(canvas.transform, "TitleText", "CYBER SAMURAI", new Vector2(0f, 60f), new Vector2(700f, 100f), 48, TextAnchor.MiddleCenter);
-        CreateText(canvas.transform, "StartText", "Press Space to Start", new Vector2(0f, -20f), new Vector2(500f, 60f), 28, TextAnchor.MiddleCenter);
+        CreateText(canvas.transform, "StartText", "Press Space / Enter to Start", new Vector2(0f, -20f), new Vector2(600f, 60f), 28, TextAnchor.MiddleCenter);
     }
 
     private void LogBuildSettingsInstructions()

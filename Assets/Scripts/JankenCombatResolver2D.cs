@@ -5,11 +5,11 @@ public class JankenCombatResolver2D : MonoBehaviour
     public float clashThresholdSeconds = 0.2f;
 
     [Header("SF3-Style Parry Timing")]
-    [Tooltip("攻撃開始からこの秒数以前のパリィ入力は早すぎて失敗")]
-    public float parryWindowStart = 0.1f;
+    [Tooltip("攻撃開始からこの秒数以前のパリィ入力は早すぎて失敗（0 = 早すぎペナルティなし）")]
+    public float parryWindowStart = 0.0f;
 
-    [Tooltip("攻撃開始からこの秒数以降のパリィ入力は遅すぎてDead（attackJudgmentTime 以下にすること）")]
-    public float parryWindowEnd = 0.2f;
+    [Tooltip("攻撃開始からこの秒数以降のパリィ入力は遅すぎてDead。attackJudgmentTime より小さくすること")]
+    public float parryWindowEnd = 0.45f;
 
     [Tooltip("パリィ成功時に攻撃側が受けるVulnerable状態の持続秒数")]
     public float attackerVulnerableDuration = 0.5f;
@@ -40,13 +40,13 @@ public class JankenCombatResolver2D : MonoBehaviour
         // ── Attack vs Guard ──────────────────────────────────────────────────
         if (initiatorState == CombatStateType.Attack && receiverState == CombatStateType.Guard)
         {
-            bool guardBroken = TryConsumeGuard(receiver);
+            bool guardBroken = TryConsumeGuard(defender: receiver, attacker: initiator);
             return guardBroken ? CombatResolutionResult.ReceiverGuardBreak : CombatResolutionResult.GuardBlocked;
         }
 
         if (initiatorState == CombatStateType.Guard && receiverState == CombatStateType.Attack)
         {
-            bool guardBroken = TryConsumeGuard(initiator);
+            bool guardBroken = TryConsumeGuard(defender: initiator, attacker: receiver);
             return guardBroken ? CombatResolutionResult.InitiatorGuardBreak : CombatResolutionResult.GuardBlocked;
         }
 
@@ -184,6 +184,16 @@ public class JankenCombatResolver2D : MonoBehaviour
         // パリィ入力のディレイ（攻撃開始からの経過秒数）
         float delay = parrier.LastActionTimestamp - attacker.LastActionTimestamp;
 
+        // パリィ側の CharacterStats があればそちらの windowSize を優先する
+        float effectiveWindowEnd = parryWindowEnd;
+        Component parrierComp = parrier as Component;
+        if (parrierComp != null)
+        {
+            CharacterStats parrierStats = parrierComp.GetComponent<CharacterStats>();
+            if (parrierStats != null)
+                effectiveWindowEnd = parrierStats.parryWindowSize;
+        }
+
         // ── 早すぎ（delay < parryWindowStart）────────────────────────────────
         if (delay < parryWindowStart)
         {
@@ -202,10 +212,10 @@ public class JankenCombatResolver2D : MonoBehaviour
             return CombatResolutionResult.NoEffect;
         }
 
-        // ── 遅すぎ（delay > parryWindowEnd）──────────────────────────────────
-        if (delay > parryWindowEnd)
+        // ── 遅すぎ（delay > effectiveWindowEnd）──────────────────────────────────
+        if (delay > effectiveWindowEnd)
         {
-            Debug.Log($"[Parry] Too LATE: delay={delay:F3}s (window={parryWindowStart}~{parryWindowEnd}s) → Dead", this);
+            Debug.Log($"[Parry] Too LATE: delay={delay:F3}s (window={parryWindowStart}~{effectiveWindowEnd}s) → Dead", this);
             parrier.ChangeState(CombatStateType.Dead);
 
             return parrierIsReceiver
@@ -213,8 +223,16 @@ public class JankenCombatResolver2D : MonoBehaviour
                 : CombatResolutionResult.InitiatorDead;
         }
 
-        // ── 成功（parryWindowStart <= delay <= parryWindowEnd）───────────────
-        Debug.Log($"[Parry] SUCCESS! delay={delay:F3}s (window={parryWindowStart}~{parryWindowEnd}s)", this);
+        // ── 成功（parryWindowStart <= delay <= effectiveWindowEnd）───────────────
+        Debug.Log($"[Parry] SUCCESS! delay={delay:F3}s (window={parryWindowStart}~{effectiveWindowEnd}s)", this);
+
+        // 攻撃側: ChangeState(Vulnerable) の前にアニメーターへパリィ由来フラグをセット
+        Component attackerComp = attacker as Component;
+        if (attackerComp != null)
+        {
+            CharacterSpriteAnimator2D anim = attackerComp.GetComponent<CharacterSpriteAnimator2D>();
+            anim?.TriggerParryVulnerable(); // フラグ先セット → 直後の ChangeState で正しいアニメが使われる
+        }
 
         // 攻撃側: attackerVulnerableDuration 秒の Vulnerable
         if (attackerSM != null)
@@ -239,15 +257,26 @@ public class JankenCombatResolver2D : MonoBehaviour
 
     // =========================================================================
 
-    private static bool TryConsumeGuard(ICombatStateActor actor)
+    private static bool TryConsumeGuard(ICombatStateActor defender, ICombatStateActor attacker)
     {
-        Component actorComponent = actor as Component;
-        if (actorComponent == null) return false;
+        Component defenderComp = defender as Component;
+        if (defenderComp == null) return false;
 
-        GuardGauge guardGauge = actorComponent.GetComponent<GuardGauge>();
+        GuardGauge guardGauge = defenderComp.GetComponent<GuardGauge>();
         if (guardGauge == null) return false;
 
-        return guardGauge.ConsumeGuard();
+        // 攻撃側の CharacterStats からガードダメージ量を取得（なければ 1）
+        int damage = 1;
+        Vector3? attackerPos = null;
+        Component attackerComp = attacker as Component;
+        if (attackerComp != null)
+        {
+            CharacterStats attackerStats = attackerComp.GetComponent<CharacterStats>();
+            if (attackerStats != null) damage = attackerStats.guardDamageDealt;
+            attackerPos = attackerComp.transform.position;
+        }
+
+        return guardGauge.ConsumeGuard(damage, attackerPos);
     }
 }
 
