@@ -15,15 +15,20 @@ public class CharacterFacing : MonoBehaviour
     public Transform target;
 
     private SpriteRenderer sr;
+    private CombatStateMachine2D combatSM; // Dead状態チェック用
 
     private void Awake()
     {
-        sr = GetComponent<SpriteRenderer>();
+        sr       = GetComponent<SpriteRenderer>();
+        combatSM = GetComponent<CombatStateMachine2D>();
     }
 
     private void LateUpdate()
     {
         if (target == null) return;
+
+        // Dead 状態のキャラは向きを変えない（倒れたまま固定）
+        if (combatSM != null && combatSM.CurrentStateType == CombatStateType.Dead) return;
 
         float dx = target.position.x - transform.position.x;
         if (Mathf.Abs(dx) < 0.01f) return;

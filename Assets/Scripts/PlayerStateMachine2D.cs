@@ -21,8 +21,7 @@ public class PlayerStateMachine2D : CombatStateMachine2D
 
     protected override bool QueryPrimaryInput()
     {
-        // ガード解除：左右移動のみ（W/S は疑似3D移動に使うため除外）
-        // キーボード
+        // ガード解除：左右移動
         var kb = Keyboard.current;
         if (kb != null)
         {
@@ -31,7 +30,6 @@ public class PlayerStateMachine2D : CombatStateMachine2D
                 return true;
         }
 
-        // ゲームパッド：スティック横 or 十字キー横でガード解除
         var gp = Gamepad.current;
         if (gp != null)
         {

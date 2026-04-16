@@ -83,15 +83,13 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
     [Tooltip("間合い調整時の移動速度（踏み込みより遅くする）")]
     public float maaiMoveSpeed = 0.7f;
 
-    [Header("Pseudo-3D（奥行き移動）")]
-    [Tooltip("プレイヤーのY座標に追従する速度")]
-    public float yTrackingSpeed = 1.5f;
-    [Tooltip("Y追従の許容誤差（この範囲内なら動かない）")]
-    public float yTrackingTolerance = 0.15f;
-    [Tooltip("移動できるY座標の下限")]
-    public float minY = -0.7f;
-    [Tooltip("移動できるY座標の上限")]
-    public float maxY =  0.4f;
+    [Header("Standby（スタンバイ移動）")]
+    [Tooltip("スタンバイ時の移動速度（戦闘より遅く）")]
+    public float standbyMoveSpeed = 0.30f;
+    [Tooltip("スタンバイ目標への到達判定距離（これ以内なら停止）")]
+    public float standbyArrivalRadius = 0.25f;
+    [Tooltip("スタンバイ中にプレイヤーに近づかせない最小X距離（安全網）")]
+    public float standbyMinPlayerDist = 1.8f;
 
     public MonoBehaviour targetActorSource;
 
@@ -136,9 +134,17 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
     private bool  lureTriggered;
     private float prevDistToTarget;
 
+
     // アクション履歴（同じアクション連続防止）
     private CombatStateType lastChosenAction = (CombatStateType)(-1);
     private int             actionRepeatCount;
+
+    // 強制攻撃フラグ（邪魔攻撃時にセット）
+    private bool forceAttackOnce = false;
+
+    // チャンス攻撃の反応遅延（パリィ後の即反応を防ぐ）
+    private float vulnerableReactUntil = 0f;  // この時刻以降に反応可能
+    private bool  vulnerableReactArmed = false; // 反応待機中フラグ
 
     // -------------------------------------------------------------------------
 
@@ -316,7 +322,19 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
         // ── スタンバイモード（待機中）──────────────────────────────────────────
         if (IsStandby)
         {
-            MoveTowardXY(standbyTarget, maaiMoveSpeed);
+            // 安全網：プレイヤーに近づきすぎたら強制的に離れる（X軸のみ）
+            if (targetTransform != null)
+            {
+                float dxToPlayer = transform.position.x - targetTransform.position.x;
+                if (Mathf.Abs(dxToPlayer) < standbyMinPlayerDist)
+                {
+                    float awayDir = dxToPlayer >= 0f ? 1f : -1f;
+                    float escapeX = targetTransform.position.x + awayDir * (standbyMinPlayerDist + 0.8f);
+                    MoveTowardX(escapeX, standbyMoveSpeed * 3f);
+                    return;
+                }
+            }
+            MoveTowardX(standbyTarget.x, standbyMoveSpeed);
             return;
         }
 
@@ -443,22 +461,28 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
             return;
         }
 
-        // チャンス攻撃（相手が Vulnerable / GuardBreak 硬直中）
-        if (ShouldImmediateAttackTarget())
+        // チャンス攻撃（ランダム遅延後にVulnerableへ反応）
+        if (vulnerableReactArmed && Time.time >= vulnerableReactUntil)
         {
-            if (distance <= approachDistance)
+            vulnerableReactArmed = false;
+            // まだVulnerable/GuardBreakか確認（硬直が終わっていたら見逃す）
+            if (targetActor.CurrentStateType == CombatStateType.Vulnerable
+             || targetActor.CurrentStateType == CombatStateType.GuardBreak)
             {
-                queuedAction     = CombatStateType.Attack;
-                pendingComboHits = ChooseComboCount() - 1;
-                ExecuteChosenAction();
-                ScheduleNextAction();
-                TryQueueRetreat();
+                if (distance <= approachDistance)
+                {
+                    queuedAction     = CombatStateType.Attack;
+                    pendingComboHits = ChooseComboCount() - 1;
+                    ExecuteChosenAction();
+                    ScheduleNextAction();
+                    TryQueueRetreat();
+                }
+                else
+                {
+                    MoveToward(targetTransform.position, moveSpeed);
+                }
+                return;
             }
-            else
-            {
-                MoveToward(targetTransform.position, moveSpeed);
-            }
-            return;
         }
 
         // 踏み込みフェーズ
@@ -476,9 +500,6 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
                 StopMovement();
             return;
         }
-
-        // ── Y追従（プレイヤーの奥行きに合わせる）─────────────────────────────
-        TrackTargetY();
 
         // 間合い管理
         float inner = maaiDistance - maaiTolerance;
@@ -544,10 +565,21 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
         IsStandby = standby;
         if (standby)
         {
-            // 待機に入ったらスケジュールをリセットして遠ざかる
+            forceAttackOnce = false;
             ScheduleNextAction();
             StopMovement();
         }
+    }
+
+    /// <summary>
+    /// 次のアクションを強制的に Attack にする（邪魔攻撃時に呼ぶ）。
+    /// SetStandbyMode(false) の直後に呼ぶこと。
+    /// </summary>
+    public void SetForceAttackOnce()
+    {
+        forceAttackOnce = true;
+        // すぐ踏み込みフェーズへ移行させるためインターバルをリセット
+        nextActionTime = Time.time;
     }
 
     /// <summary>スタンバイ中の目標位置を MultiEnemyManager から設定される。</summary>
@@ -589,7 +621,54 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
             Debug.Log($"[{enemyType}] フェイント見切り！即攻撃チャンス", this);
         }
 
+        // パリィ空振り / その他 → Vulnerable 遷移：ランダム遅延付きで反応
+        // フェイント由来はすでに上で処理しているので除外
+        bool targetJustBecameVulnerable =
+            lastTargetState != CombatStateType.Vulnerable
+            && lastTargetState != CombatStateType.GuardBreak
+            && lastTargetState != CombatStateType.Dead
+            && lastTargetState != CombatStateType.Feint // フェイント由来は別処理
+            && (nowTargetState == CombatStateType.Vulnerable
+             || nowTargetState == CombatStateType.GuardBreak);
+
+        if (targetJustBecameVulnerable && !vulnerableReactArmed && !counterQueued)
+        {
+            // タイプ別の反応確率チェック（全員が反応するわけではない）
+            float reactChance = GetVulnerableReactChance();
+            if (Random.value < reactChance)
+            {
+                // ランダム遅延：0.1〜0.6秒後に反応（機械的な即反応を防ぐ）
+                float delay = Random.Range(0.10f, 0.60f);
+                vulnerableReactUntil = Time.time + delay;
+                vulnerableReactArmed = true;
+                Debug.Log($"[{enemyType}] Vulnerable検知、{delay:F2}s後に反応", this);
+            }
+        }
+
+        // Vulnerable が終わったらリセット
+        if (vulnerableReactArmed
+            && nowTargetState != CombatStateType.Vulnerable
+            && nowTargetState != CombatStateType.GuardBreak)
+        {
+            vulnerableReactArmed = false;
+        }
+
         lastTargetState = nowTargetState;
+    }
+
+    /// <summary>タイプ別のVulnerable反応確率。慎重な敵ほど高く、攻撃的な敵は低め。</summary>
+    private float GetVulnerableReactChance()
+    {
+        switch (enemyType)
+        {
+            case EnemyType.Attacker:     return 0.55f; // 積極的だが見切りは粗い
+            case EnemyType.Rusher:       return 0.45f; // 突っ込むが観察力は低い
+            case EnemyType.Careful:      return 0.80f; // 慎重で隙を見逃さない
+            case EnemyType.ParrySpammer: return 0.70f; // パリィ後のチャンスに敏感
+            case EnemyType.Feinter:      return 0.60f;
+            case EnemyType.Dodger:       return 0.65f;
+            default:                     return 0.55f;
+        }
     }
 
     /// <summary>
@@ -658,13 +737,6 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
     {
         return enemyStateMachine.CurrentStateType == CombatStateType.Guard
             || enemyStateMachine.CurrentStateType == CombatStateType.Idle;
-    }
-
-    private bool ShouldImmediateAttackTarget()
-    {
-        if (targetActor == null) return false;
-        return targetActor.CurrentStateType == CombatStateType.Vulnerable
-            || targetActor.CurrentStateType == CombatStateType.GuardBreak;
     }
 
     private void ExecuteChosenAction()
@@ -760,6 +832,13 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
 
     private CombatStateType ChooseNextAction()
     {
+        // 邪魔攻撃フラグが立っていたら必ず Attack
+        if (forceAttackOnce)
+        {
+            forceAttackOnce = false;
+            return CombatStateType.Attack;
+        }
+
         float attackW, parryW, feintW;
         GetActionWeights(enemyType, out attackW, out parryW, out feintW);
 
@@ -840,39 +919,18 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
         Debug.Log($"[{enemyType}] Post-attack retreat start (maai={maaiDistance:F1})", this);
     }
 
-    /// <summary>プレイヤーの Y 座標に緩やかに追従する（戦闘中も常時動く）。</summary>
-    private void TrackTargetY()
+    /// <summary>X軸のみ目標へ移動する（スタンバイ移動用）。</summary>
+    private void MoveTowardX(float targetX, float speed)
     {
-        if (targetTransform == null || rb == null) return;
-        float dy = targetTransform.position.y - transform.position.y;
-        if (Mathf.Abs(dy) <= yTrackingTolerance) return;
-
-        float vy = Mathf.Sign(dy) * yTrackingSpeed;
-        rb.linearVelocity = new Vector2(rb.linearVelocity.x, vy);
-
-        // Y クランプ
-        Vector2 pos = rb.position;
-        pos.y = Mathf.Clamp(pos.y, minY, maxY);
-        rb.position = pos;
-    }
-
-    /// <summary>XY 両方向に目標へ移動する（スタンバイ移動用）。</summary>
-    private void MoveTowardXY(Vector3 destination, float speed)
-    {
-        Vector2 delta = (Vector2)(destination - transform.position);
-        if (delta.magnitude <= 0.05f) { StopMovement(); return; }
-        if (rb != null)
-            rb.linearVelocity = delta.normalized * speed;
-        else
-            transform.position = Vector3.MoveTowards(transform.position, destination, speed * Time.deltaTime);
-
-        // Y クランプ
-        if (rb != null)
+        float dx = targetX - transform.position.x;
+        if (Mathf.Abs(dx) <= standbyArrivalRadius)
         {
-            Vector2 pos = rb.position;
-            pos.y = Mathf.Clamp(pos.y, minY, maxY);
-            rb.position = pos;
+            if (rb != null) rb.linearVelocity = new Vector2(0f, rb.linearVelocity.y);
+            return;
         }
+        float dir = Mathf.Sign(dx);
+        if (rb != null) rb.linearVelocity = new Vector2(dir * speed, rb.linearVelocity.y);
+        else transform.position += new Vector3(dir * speed * Time.deltaTime, 0f, 0f);
     }
 
     private void MoveToward(Vector3 destination, float speed)
@@ -880,7 +938,7 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
         float deltaX = destination.x - transform.position.x;
         if (Mathf.Abs(deltaX) <= 0.01f) { StopMovement(); return; }
         float dir = Mathf.Sign(deltaX);
-        if (rb != null) rb.linearVelocity = new Vector2(dir * speed, rb.linearVelocity.y);
+        if (rb != null) rb.linearVelocity = new Vector2(dir * speed, 0f);
         else transform.position += new Vector3(dir * speed * Time.deltaTime, 0f, 0f);
     }
 
@@ -888,13 +946,13 @@ public class EnemyRandomCombatAI2D : MonoBehaviour
     {
         float deltaX = transform.position.x - from.x;
         float dir = Mathf.Abs(deltaX) <= 0.01f ? 1f : Mathf.Sign(deltaX);
-        if (rb != null) rb.linearVelocity = new Vector2(dir * speed, rb.linearVelocity.y);
+        if (rb != null) rb.linearVelocity = new Vector2(dir * speed, 0f);
         else transform.position += new Vector3(dir * speed * Time.deltaTime, 0f, 0f);
     }
 
     private void StopMovement()
     {
-        if (rb != null) rb.linearVelocity = new Vector2(0f, rb.linearVelocity.y);
+        if (rb != null) rb.linearVelocity = Vector2.zero;
     }
 
     private void ScheduleNextAction()

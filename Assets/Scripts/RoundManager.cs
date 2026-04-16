@@ -4,7 +4,8 @@ using UnityEngine.UI;
 public class RoundManager : MonoBehaviour
 {
     public CombatStateMachine2D playerState;
-    public CombatStateMachine2D enemyState;
+    public CombatStateMachine2D enemyState;   // 単体モード用（マルチ時は null でよい）
+    public MultiEnemyManager    multiEnemyManager; // マルチ敵モード用
     public GuardGauge playerGuardGauge;
     public GuardGauge enemyGuardGauge;
     public Text resultText;
@@ -52,7 +53,16 @@ public class RoundManager : MonoBehaviour
             return;
         }
 
-        if (enemyState.CurrentStateType == CombatStateType.Dead)
+        // マルチ敵モード：全員倒したら勝利
+        if (multiEnemyManager != null)
+        {
+            if (multiEnemyManager.AllEnemiesDefeated)
+            {
+                playerWins++;
+                EndRound("Player Win!");
+            }
+        }
+        else if (enemyState != null && enemyState.CurrentStateType == CombatStateType.Dead)
         {
             playerWins++;
             EndRound("Player Win");
@@ -83,17 +93,19 @@ public class RoundManager : MonoBehaviour
         SetResultText(string.Empty);
 
         ResetActor(playerState, playerStartPosition);
-        ResetActor(enemyState, enemyStartPosition);
 
-        if (playerGuardGauge != null)
+        // マルチ敵モード：全員まとめてリセット
+        if (multiEnemyManager != null)
         {
-            playerGuardGauge.ResetToMax();
+            multiEnemyManager.ResetForNewRound();
+        }
+        else
+        {
+            ResetActor(enemyState, enemyStartPosition);
         }
 
-        if (enemyGuardGauge != null)
-        {
-            enemyGuardGauge.ResetToMax();
-        }
+        if (playerGuardGauge != null) playerGuardGauge.ResetToMax();
+        if (enemyGuardGauge  != null) enemyGuardGauge.ResetToMax();
 
         if (battleController != null)
         {
